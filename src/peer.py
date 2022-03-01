@@ -5,7 +5,7 @@ import string
 from threading import Thread
 from time import sleep
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 HEADER = 64
 ENCODING = 'utf-8'
@@ -151,7 +151,7 @@ class Peer:
             print(f"Exception when in 'start': {ex}")
             return False
 
-    def connect(self, addr: Tuple[str, int]) -> socket.socket:
+    def connect(self, addr: Tuple[str, int]) -> Optional[socket.socket]:
         try:
             conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             conn.connect(addr)
@@ -160,6 +160,36 @@ class Peer:
         except Exception as ex:
             print(f"Exception when connecting to {addr}: {ex}")
             return False
+
+    def disconnect(self, uuid) -> Optional[bool]:
+        if uuid in self._connections:
+            pcon = self._connections[uuid]
+        else:
+            print(f"Connection uuid does not exist: {uuid}")
+            return False
+        try:
+            pcon.active = False
+            pcon.conn.sendall(Peer.wrap_message(DISCONNNECT_MESSAGE))
+        except IOError as ex:
+            if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
+                pass
+            else:
+                print(f"IOError handled: {ex}")
+        except Exception as ex:
+            print(f"Exception when disconnecting connection {uuid}: {ex}")
+            return None
+        sleep(PRE_CONNECTION_CLOSE_SLEEP_TIME)
+        try:
+            pcon.conn.close()
+        except IOError as ex:
+            if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
+                pass
+            else:
+                print(f"IOError handled: {ex}")
+        except Exception as ex:
+            print(f"Exception when ending peer connection: {ex}")
+            return None
+        return True
 
     def chat(self, uuid) -> bool:
         if uuid in self._connections:

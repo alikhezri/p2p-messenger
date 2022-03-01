@@ -35,6 +35,16 @@ if __name__ == '__main__':
                         mypeer.connect((host, port))
                     except Exception as ex:
                         print(f"Couldn't connect: {ex}")
+                elif words[0] == r"\d" or words[0] == r"\disconnect":
+                    try:
+                        if len(words[1:]) == 1:
+                            uuid = words[1]
+                            mypeer.disconnect(uuid=uuid)
+                        else:
+                            print(f"Command '{words[0]}' gets 1 arguement")
+                            continue
+                    except Exception as ex:
+                        print(f"Couldn't perform disconnection: {ex}")
                 elif words[0] == r"\me":
                     print(f"My Info: {mypeer.host}:{mypeer.port}")
                     pass
