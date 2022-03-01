@@ -14,7 +14,7 @@ UUID_LENGTH = 8
 
 DEFAULT_TAIL_LENGTH = 20
 DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
-
+PRE_CONNECTION_CLOSE_SLEEP_TIME = 1.5
 
 class Message:
     def __init__(self, incoming: bool, text: str, time: datetime = datetime.now()) -> None:
@@ -247,7 +247,7 @@ class Peer:
                     print(f"IOError handled: {ex}")
             except Exception as ex:
                 print(f"Exception when ending peer connection: {ex}")
-        sleep(1.5)
+        sleep(PRE_CONNECTION_CLOSE_SLEEP_TIME)
         for pcon in self._connections.values():
             try:
                 pcon.conn.close()
