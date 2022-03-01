@@ -1,10 +1,10 @@
-from curses import resetty
 import errno
 import socket
 import random
 import string
 from threading import Thread
 from time import sleep
+from datetime import datetime
 from typing import Dict, List, Tuple
 
 HEADER = 64
@@ -12,14 +12,37 @@ ENCODING = 'utf-8'
 DISCONNNECT_MESSAGE = '!!DISCONNECT!!'
 UUID_LENGTH = 8
 
+DEFAULT_TAIL_LENGTH = 20
+DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+class Message:
+    def __init__(self, incoming: bool, text: str, time: datetime = datetime.now()) -> None:
+        self.incoming = incoming
+        self.text = text
+        self.time = time
+
 
 class PeerConnection:
-    def __init__(self, conn: socket.socket, host: str, port: int, active: bool = True) -> None:
+    def __init__(self, uuid: str, conn: socket.socket, host: str, port: int, active: bool = True) -> None:
+        self.uuid = uuid
         self.active = active
         self.conn = conn
         self.host = host
         self.port = port
-        # self.messages = [] TODO: Messages implementation
+        self.messages: List[Message] = []
+
+    def get_messages(self, tail: int = DEFAULT_TAIL_LENGTH, time_format: str = DEFAULT_TIME_FORMAT) -> List[str]:
+        messages = self.messages[-tail:]
+        formatted_messages = []
+        for m in messages:
+            if m.incoming:
+                formatted_messages.append(
+                    f"[{m.time.strftime(time_format)}] {self.uuid}: {m.text}")
+            else:
+                formatted_messages.append(
+                    f"[{m.time.strftime(time_format)}] You: {m.text}")
+        return formatted_messages
 
 
 class Peer:
@@ -65,9 +88,9 @@ class Peer:
                     if msg:
                         if msg == DISCONNNECT_MESSAGE:
                             CONNECTED = False
-                        # conn.sendall(Peer.wrap_message(
-                        #     f"Server Echoed: {msg}"))
-                        # print(f"{uuid}: > {msg}") # TODO: messages should be saved in buffer
+                        self._connections[uuid].messages.append(
+                            Message(incoming=True, text=msg)
+                        )
                     else:
                         continue
                 except IOError as ex:
@@ -88,6 +111,7 @@ class Peer:
             daemon=True,
         )
         self._connections[uuid] = PeerConnection(
+            uuid=uuid,
             conn=conn,
             host=addr[0],
             port=addr[1],
@@ -145,16 +169,32 @@ class Peer:
             while CHAT_MODE:
                 try:
                     raw_message = input(f"You: > ")
+                    splitted_raw_message = raw_message.split()
                     if raw_message:
-                        if raw_message == r"\b" or raw_message == r"\back":
+                        if splitted_raw_message[0] == r"\b" or splitted_raw_message[0] == r"\back":
                             CHAT_MODE = False
                             continue
-                        # elif raw_message.split()[0] == r"\t" # TODO: Get messages
+                        elif splitted_raw_message[0] == r"\t" or splitted_raw_message[0] == r"\tail":
+                            if len(splitted_raw_message) == 2:
+                                try:
+                                    tail = int(splitted_raw_message[1])
+                                    messages = self._connections[uuid].get_messages(tail=tail)
+                                except Exception as ex:
+                                    print(
+                                        f"Tail's second parameter should be number: {splitted_raw_message[1]}")
+                                    continue
+                            else:
+                                messages = self._connections[uuid].get_messages()
+                            for m in messages:
+                                print(m)
                         else:
                             if self._connections[uuid].active:
                                 prepared_message = Peer.wrap_message(
                                     raw_message=raw_message)
                                 conn.sendall(prepared_message)
+                                self._connections[uuid].messages.append(
+                                    Message(incoming=False, text=raw_message)
+                                )
                             else:
                                 print(
                                     "Connection is ended, only recent messages can be seen")
