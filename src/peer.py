@@ -115,15 +115,14 @@ class Peer:
             return None, None
 
     def handle_connection(self, conn: socket.socket, uuid: str) -> None:
-        CONNECTED = True
         with conn:
-            while CONNECTED:
+            while self._connections[uuid].active:
                 try:
                     msg = Peer._tcp_get_payload(conn=conn)
                     # print(f"Var 'message' in 'handle_connection': {msg}")
                     if msg:
                         if msg == DISCONNNECT_MESSAGE:
-                            CONNECTED = False
+                            self._connections[uuid].active = False
                         self._connections[uuid].messages.append(
                             Message(incoming=True, text=msg)
                         )
