@@ -1,15 +1,18 @@
-import random
+# import random
 import socket
-from peer import Peer
+import sys
+import os
+from time import sleep
+from peer import TCP_PORT, UDP_PORT, Peer
 
 SERVER = socket.gethostbyname(socket.gethostname())
-PORT = random.randint(200, 300) * 17
-# PORT = 3434
+DISCOVER_SLEEP_TIME = 2
 
 
 if __name__ == '__main__':
-    mypeer = Peer(host=SERVER, port=PORT)
-    mypeer.start()
+    mypeer = Peer(host=SERVER, tcp_port=TCP_PORT, udp_port=UDP_PORT)
+    if not mypeer.start():
+        sys.exit(os.EX_IOERR)
     ACTIVE = True
     while ACTIVE:
         try:
@@ -77,6 +80,18 @@ if __name__ == '__main__':
                             continue
                     except Exception as ex:
                         print(f"Couldn't start chat: {ex}")
+                elif words[0] == r"\discover":
+                    mypeer.discover()
+                    sleep(DISCOVER_SLEEP_TIME)
+                    discovereds = mypeer.get_discovered()
+                    if discovereds:
+                        print("Discovered Peers:")
+                        number = 0
+                        for d in discovereds:
+                            number += 1
+                            print(f"\t{number}) {d}")
+                    else:
+                        print("No Neighbor Discoverd")
                 elif words[0] == r"\help" or words[0] == r"\h":
                     # TODO: help should be added
                     pass
