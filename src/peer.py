@@ -225,6 +225,9 @@ class Peer:
             print(f"Exception when in 'start': {ex}")
             return False
 
+    def get_me(self):
+        return f"{self.host}:{self.tcp_port}"
+
     def connect(self, addr: Tuple[str, int]) -> Optional[socket.socket]:
         try:
             conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -243,7 +246,7 @@ class Peer:
             return False
         try:
             pcon.active = False
-            pcon.conn.sendall(Peer.wrap_message(DISCONNNECT_MESSAGE))
+            pcon.conn.sendall(Peer.wrap_payload(payload=DISCONNNECT_MESSAGE))
         except IOError as ex:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
@@ -282,19 +285,21 @@ class Peer:
                             if len(splitted_raw_message) == 2:
                                 try:
                                     tail = int(splitted_raw_message[1])
-                                    messages = self._connections[uuid].get_messages(tail=tail)
+                                    messages = self._connections[uuid].get_messages(
+                                        tail=tail)
                                 except Exception as ex:
                                     print(
                                         f"Tail's second parameter should be number: {splitted_raw_message[1]}")
                                     continue
                             else:
-                                messages = self._connections[uuid].get_messages()
+                                messages = self._connections[uuid].get_messages(
+                                )
                             for m in messages:
                                 print(m)
                         else:
                             if self._connections[uuid].active:
-                                prepared_message = Peer.wrap_message(
-                                    raw_message=raw_message)
+                                prepared_message = Peer.wrap_payload(
+                                    payload=raw_message)
                                 conn.sendall(prepared_message)
                                 self._connections[uuid].messages.append(
                                     Message(incoming=False, text=raw_message)

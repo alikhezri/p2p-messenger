@@ -49,27 +49,28 @@ if __name__ == '__main__':
                     except Exception as ex:
                         print(f"Couldn't perform disconnection: {ex}")
                 elif words[0] == r"\me":
-                    print(f"My Info: {mypeer.host}:{mypeer.port}")
+                    me = mypeer.get_me()
+                    print(f"My Info: {me}")
                     pass
                 elif words[0] == r"\ls":
-                    active_neighbors = mypeer.list_actives()
-                    if active_neighbors:
-                        print("Active Available Neighbors:")
+                    active_connections = mypeer.list_actives()
+                    if active_connections:
+                        print("Active Available Connections:")
                         number = 0
-                        for uuid, addr in active_neighbors:
+                        for uuid, addr in active_connections:
                             number += 1
                             print(f"\t{number}) {uuid} at {addr}")
                     else:
-                        print("No active neighbors available!")
-                    inactive_neighbors = mypeer.list_inactives()
-                    if inactive_neighbors:
-                        print("Inactive Available Neighbors:")
+                        print("No active connections available!")
+                    inactive_connections = mypeer.list_inactives()
+                    if inactive_connections:
+                        print("Inactive Available Connections:")
                         number = 0
-                        for uuid, addr in inactive_neighbors:
+                        for uuid, addr in inactive_connections:
                             number += 1
                             print(f"\t{number}) {uuid} at {addr}")
                     else:
-                        print("No inactive neighbors available!")
+                        print("No inactive connections available!")
                 elif words[0] == r"\message" or words[0] == r"\chat":
                     try:
                         if len(words[1:]) == 1:
