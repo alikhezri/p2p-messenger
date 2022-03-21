@@ -36,7 +36,6 @@ class MessageType(enum.Enum):
 
 
 class Message(ABC):
-    # __slots__ = 'type', 'time'
     def __init__(self) -> None:
         self.type = MESSAGE_CLASS_TO_TYPE_MAPPING[self.__class__]
         self.time = datetime.now()
@@ -69,7 +68,6 @@ class Message(ABC):
 
 
 class ChatMessage(Message):
-    # __slots__ = 'text', 'incoming'
     def __init__(self, text: str, incoming: bool = True) -> None:
         super().__init__()
         self.text = text
