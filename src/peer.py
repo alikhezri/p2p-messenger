@@ -97,10 +97,36 @@ class DisconnectMessage(Message):
         return cls._get_clean_data_func(attributes=[])(data=data)
 
 
+class DiscoverQuestion(Message):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_data(self) -> Dict:
+        return super().get_data()
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=[])(data=data)
+
+
+class DiscoverAnswer(Message):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_data(self) -> Dict:
+        return super().get_data()
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=[])(data=data)
+
+
 MESSAGE_CLASS_TO_TYPE_MAPPING = {
     Message: MessageType.ABSTRACT_MESSAGE,
     ChatMessage: MessageType.CHAT_MESSAGE,
     DisconnectMessage: MessageType.DISCONNNECT_MESSAGE,
+    DiscoverQuestion: MessageType.DISCOVER_QUESTION,
+    DiscoverAnswer: MessageType.DISCOVER_ANSWER,
 }
 
 MESSAGE_TYPE_TO_CLASS_MAPPING = {
@@ -171,15 +197,14 @@ class Peer:
             raise Exception(f"No TCP payload_length_str: {payload_length_str}")
 
     @staticmethod
-    def _udp_get_payload(conn: socket.socket, header_length: int = UDP_HEADER, body_length: int = UDP_BODY) -> Tuple[Optional[str], Optional[Tuple[str, int]]]:
+    def udp_get_payload(conn: socket.socket, header_length: int = UDP_HEADER, body_length: int = UDP_BODY) -> Tuple[Optional[bytes], Optional[Tuple[str, int]]]:
         packet_bytes, addr = conn.recvfrom(header_length + body_length)
         payload_length_str = packet_bytes[:header_length].decode(
             ENCODING).strip()
         if payload_length_str:
             try:
                 payload_length = int(payload_length_str)
-                payload = packet_bytes[header_length:header_length +
-                                       payload_length].decode(ENCODING)
+                payload = packet_bytes[header_length:header_length+payload_length]
                 return payload, addr
             except Exception as ex:
                 print(f"Exception wehen getting UDP payload: {ex}")
@@ -213,7 +238,7 @@ class Peer:
             return MessageClass(**clean_data)
 
     @staticmethod
-    def receive_message(conn: socket.socket) -> Optional[Message]:
+    def receive_tcp_message(conn: socket.socket) -> Optional[Message]:
         payload = Peer.tcp_get_payload(conn=conn)
         if not payload:
             print("No Payload in receive_message")
@@ -232,7 +257,7 @@ class Peer:
             while self._connections[uuid].active:
                 try:
                     # msg = Peer._tcp_get_payload(conn=conn)
-                    msg = Peer.receive_message(conn=conn)
+                    msg = Peer.receive_tcp_message(conn=conn)
                     # print(f"Var 'message' in 'handle_connection': {msg}")
                     if msg:
                         if msg.type == MessageType.DISCONNNECT_MESSAGE:
@@ -295,6 +320,21 @@ class Peer:
                 except Exception as ex:
                     print(f"Couldn't listen: {ex}")
 
+    @staticmethod
+    def receive_udp_message(conn: socket.socket) -> Tuple[Optional[Message], Optional[Tuple[str, int]]]:
+        payload, addr = Peer.udp_get_payload(conn=conn)
+        if not payload:
+            print("No Payload in receive_message")
+            raise Exception("Payload receive Exception")
+        print(f"payload in receive_message: {payload}")
+        data = Peer.extract_payload(payload=payload)
+        if not data:
+            print("No data in receive_message")
+            raise Exception("Data receive Exception")
+        print(f"data in receive_message: {data}")
+        message = Peer.get_message(data)
+        return message, addr
+
     def _udp_listen(self, addr: Tuple) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             self._udp_listen_socket = s
@@ -302,24 +342,23 @@ class Peer:
             while True:
                 try:
                     # TODO: use data which can be neighbors' neighbor and encryption etc.
-                    data, addr = Peer._udp_get_payload(conn=s)
-                    if data == MessageType.DISCOVER_QUESTION:
+                    message, addr = Peer.receive_udp_message(conn=s)
+                    if message.type == MessageType.DISCOVER_QUESTION:
                         if addr[0] == self.host:
                             continue
                         print(f"Got discover question from {addr}")
-                        s.sendto(
-                            Peer.wrap_payload(
-                                payload=MessageType.DISCOVER_ANSWER,
-                                header_length=UDP_HEADER,
-                            ),
-                            (addr[0], UDP_PORT)
+                        answer_msg = DiscoverAnswer()
+                        self.send_udp_message(
+                            message=answer_msg,
+                            conn=s,
+                            to=(addr[0], UDP_PORT),
                         )
                         print("Discover answer sent")
-                    elif data == MessageType.DISCOVER_ANSWER:
+                    elif message.type == MessageType.DISCOVER_ANSWER:
                         print(f"New neighbor found! {addr[0]}:{TCP_PORT}")
                         self._near_neighbors.add(f"{addr[0]}:{TCP_PORT}")
                     else:
-                        print(f"Got unknown UDP message: {data}")
+                        print(f"Got unknown UDP message: {message}")
                 except IOError as ex:
                     if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                         return
@@ -327,6 +366,7 @@ class Peer:
                     continue
                 except Exception as ex:
                     print(f"Couldn't listen: {ex}")
+                    continue
 
     def start(self) -> bool:
         try:
@@ -371,7 +411,7 @@ class Peer:
         try:
             pcon.active = False
             message = DisconnectMessage()
-            self.send_message(message=message, conn=pcon.conn)
+            self.send_tcp_message(message=message, conn=pcon.conn)
         except IOError as ex:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
@@ -409,7 +449,7 @@ class Peer:
         return payload
 
     @staticmethod
-    def send_message(message: Message, conn: socket.socket) -> bool:
+    def send_tcp_message(message: Message, conn: socket.socket) -> bool:
         data = message.get_data()
         print(f"data in send_message: {data}")
         payload = Peer.get_payload(data=data)
@@ -452,7 +492,7 @@ class Peer:
                             if self._connections[uuid].active:
                                 message = ChatMessage(
                                     incoming=False, text=raw_message)
-                                if self.send_message(
+                                if self.send_tcp_message(
                                     message=message,
                                     conn=conn,
                                 ):
@@ -492,6 +532,18 @@ class Peer:
     def get_discovered(self) -> List:
         return [nn for nn in self._near_neighbors]
 
+    @staticmethod
+    def send_udp_message(message: Message, conn: socket.socket, to: Tuple[str, int]) -> bool:
+        data = message.get_data()
+        print(f"data in send_message: {data}")
+        payload = Peer.get_payload(data=data)
+        print(f"payload in send_message: {payload}")
+        prepared_message = Peer.wrap_payload(
+            payload=payload, header_length=UDP_HEADER)
+        print(f"prepared_message in send_message: {prepared_message}")
+        conn.sendto(prepared_message, to)
+        return True
+
     def discover(self) -> None:
         # TODO: all interfaces should be used
         # interfaces = socket.getaddrinfo(host=socket.gethostname(), port=None, family=socket.AF_INET)
@@ -505,16 +557,18 @@ class Peer:
         print("Creating UDP socket for broadcast")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as s:
             print("Setting options for UDP broadcast")
-            s.setsockopt(socket.SOL_SOCKET,
-                         socket.SO_BROADCAST, IP_MULTICAST_TTL)
+            s.setsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_BROADCAST,
+                IP_MULTICAST_TTL
+            )
             s.bind((self.host, 0))
             print("Sending UDP braodcast message")
-            s.sendto(
-                Peer.wrap_payload(
-                    payload=MessageType.DISCOVER_QUESTION,
-                    header_length=UDP_HEADER
-                ),
-                ('255.255.255.255', self.udp_port)
+            message = DiscoverQuestion()
+            self.send_udp_message(
+                message=message,
+                conn=s,
+                to=('255.255.255.255', self.udp_port),
             )
 
     def end_gracefully(self) -> None:
@@ -542,7 +596,7 @@ class Peer:
             try:
                 pcon.active = False
                 message = DisconnectMessage()
-                self.send_message(message=message, conn=pcon.conn)
+                self.send_tcp_message(message=message, conn=pcon.conn)
             except IOError as ex:
                 if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                     pass
