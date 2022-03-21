@@ -1,23 +1,23 @@
+from abc import ABC, abstractmethod
+import enum
 import errno
 import socket
 import random
 import string
+import pickle
 from threading import Thread
 from time import sleep
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+import traceback
+from typing import Callable, Dict, List, Optional, Tuple, Type
 
 TCP_PORT = 3434
 UDP_PORT = 5151
-
 
 TCP_HEADER = 64
 UDP_HEADER = 64
 UDP_BODY = 2048
 ENCODING = 'utf-8'
-DISCONNNECT_MESSAGE = '!!DISCONNECT!!'
-DISCOVER_QUESTION = '!!DISCOVER!!'
-DISCOVER_ANSWER = '!!DISCOVERED!!'
 UUID_LENGTH = 8
 
 DEFAULT_TAIL_LENGTH = 20
@@ -26,11 +26,88 @@ PRE_CONNECTION_CLOSE_SLEEP_TIME = 1.5
 IP_MULTICAST_TTL = 1
 
 
-class Message:
-    def __init__(self, incoming: bool, text: str, time: datetime = datetime.now()) -> None:
-        self.incoming = incoming
+class MessageType(enum.Enum):
+    ABSTRACT_MESSAGE = 0
+    CONNECT_MESSAGE = 10
+    CHAT_MESSAGE = 11
+    DISCONNNECT_MESSAGE = 12
+    DISCOVER_QUESTION = 31
+    DISCOVER_ANSWER = 32
+
+
+class Message(ABC):
+    # __slots__ = 'type', 'time'
+    def __init__(self) -> None:
+        self.type = MESSAGE_CLASS_TO_TYPE_MAPPING[self.__class__]
+        self.time = datetime.now()
+
+    def get_data(self) -> Dict:
+        return {
+            "type": self.type,
+            "time": self.time,
+        }
+
+    @classmethod
+    def _get_clean_data_func(cls, attributes: List[str] = []) -> Callable[[Dict], Optional[Dict]]:
+        def _clean_data(data: Dict) -> Optional[Dict]:
+            cleaned_data = {}
+            print(f"attributes: {attributes}")
+            print(f"data: {data}")
+            for attr in attributes:
+                if attr in data:
+                    cleaned_data[attr] = data[attr]
+                else:
+                    return False
+            print(f"cleaned_data {cleaned_data}")
+            return cleaned_data
+        return _clean_data
+
+    @classmethod
+    @abstractmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=[])(data=data)
+
+
+class ChatMessage(Message):
+    # __slots__ = 'text', 'incoming'
+    def __init__(self, text: str, incoming: bool = True) -> None:
+        super().__init__()
         self.text = text
-        self.time = time
+        self.incoming = incoming
+
+    def get_data(self) -> Dict:
+        return {
+            "type": self.type,
+            "time": self.time,
+            "text": self.text,
+        }
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=['text', ])(data=data)
+
+
+class DisconnectMessage(Message):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_data(self) -> Dict:
+        return super().get_data()
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=[])(data=data)
+
+
+MESSAGE_CLASS_TO_TYPE_MAPPING = {
+    Message: MessageType.ABSTRACT_MESSAGE,
+    ChatMessage: MessageType.CHAT_MESSAGE,
+    DisconnectMessage: MessageType.DISCONNNECT_MESSAGE,
+}
+
+MESSAGE_TYPE_TO_CLASS_MAPPING = {
+    v: k for k, v in MESSAGE_CLASS_TO_TYPE_MAPPING.items()
+}
 
 
 class PeerConnection:
@@ -40,7 +117,7 @@ class PeerConnection:
         self.conn = conn
         self.host = host
         self.port = port
-        self.messages: List[Message] = []
+        self.messages: List[ChatMessage] = []
 
     def get_messages(self, tail: int = DEFAULT_TAIL_LENGTH, time_format: str = DEFAULT_TIME_FORMAT) -> List[str]:
         messages = self.messages[-tail:]
@@ -65,39 +142,38 @@ class Peer:
         self._connections: Dict[str, PeerConnection] = {}
         self._near_neighbors = set()
 
-    @classmethod
-    def get_uuid(cls, length=64) -> str:
+    @staticmethod
+    def get_uuid(length=64) -> str:
         alphanumeric = string.ascii_letters + string.digits
         uuid = ''.join(random.choices(population=alphanumeric, k=length))
         return uuid
 
-    @classmethod
-    def wrap_payload(cls, payload: str, header_length: int = TCP_HEADER) -> bytes:
-        payload_bytes = payload.encode(ENCODING)
-        payload_length = str(len(payload_bytes)).encode(ENCODING)
-        header = payload_length + b' ' * (header_length - len(payload_length))
-        full_message = header + payload_bytes
+    @staticmethod
+    def wrap_payload(payload: bytes, header_length: int = TCP_HEADER) -> bytes:
+        payload_length_bytes = str(len(payload)).encode(ENCODING)
+        header = payload_length_bytes + b' ' * \
+            (header_length - len(payload_length_bytes))
+        full_message = header + payload
         return full_message
 
-    @classmethod
-    def _tcp_get_payload(cls, conn: socket, header_length: int = TCP_HEADER) -> str:
+    @staticmethod
+    def tcp_get_payload(conn: socket, header_length: int = TCP_HEADER) -> bytes:
         payload_length_str = conn.recv(
             header_length).decode(ENCODING).strip()
         if payload_length_str:
             try:
                 payload_length = int(payload_length_str)
-                payload = conn.recv(payload_length).decode(ENCODING)
+                payload = conn.recv(payload_length)
                 return payload
             except Exception as ex:
                 print(f"Exception wehen getting TCP payload: {ex}")
                 return False
         else:
             # TODO: DEBUG log
-            print(f"No TCP payload_length_str: {payload_length_str}")
-            return None
+            raise Exception(f"No TCP payload_length_str: {payload_length_str}")
 
-    @classmethod
-    def _udp_get_payload(cls, conn: socket.socket, header_length: int = UDP_HEADER, body_length: int = UDP_BODY) -> Tuple[Optional[str], Optional[Tuple[str, int]]]:
+    @staticmethod
+    def _udp_get_payload(conn: socket.socket, header_length: int = UDP_HEADER, body_length: int = UDP_BODY) -> Tuple[Optional[str], Optional[Tuple[str, int]]]:
         packet_bytes, addr = conn.recvfrom(header_length + body_length)
         payload_length_str = packet_bytes[:header_length].decode(
             ENCODING).strip()
@@ -114,29 +190,77 @@ class Peer:
             print(f"No UDP payload_length_str: {payload_length_str}")
             return None, None
 
+    @staticmethod
+    def extract_payload(payload: bytes, encryption_key: Optional[str] = None) -> Optional[Dict]:
+        if encryption_key:
+            payload = Peer.decrypt(cipher=payload, key=encryption_key)
+        try:
+            data = pickle.loads(data=payload, encoding=ENCODING)
+            if not type(data) == dict:
+                raise Exception("Failed To Load Data")
+            return data
+        except Exception as ex:
+            print(f"Exception when getting dict data: {ex}")
+            return False
+
+    @staticmethod
+    def get_message(data: Dict) -> Message:
+        MessageClass: Type[Message] = MESSAGE_TYPE_TO_CLASS_MAPPING[data['type']]
+        print(MessageClass)
+        clean_data = MessageClass.clean_data(data=data)
+        if clean_data == False:
+            print(f"Could not create message from received data: {data}")
+            raise Exception(f"Message Parse Exception with data: {data}")
+        else:
+            return MessageClass(**clean_data)
+
+    @staticmethod
+    def receive_message(conn: socket.socket) -> Optional[Message]:
+        payload = Peer.tcp_get_payload(conn=conn)
+        if not payload:
+            print("No Payload in receive_message")
+            raise Exception("Payload receive Exception")
+        print(f"payload in receive_message: {payload}")
+        data = Peer.extract_payload(payload=payload)
+        if not data:
+            print("No data in receive_message")
+            raise Exception("Data receive Exception")
+        print(f"data in receive_message: {data}")
+        message = Peer.get_message(data)
+        return message
+
     def handle_connection(self, conn: socket.socket, uuid: str) -> None:
         with conn:
             while self._connections[uuid].active:
                 try:
-                    msg = Peer._tcp_get_payload(conn=conn)
+                    # msg = Peer._tcp_get_payload(conn=conn)
+                    msg = Peer.receive_message(conn=conn)
                     # print(f"Var 'message' in 'handle_connection': {msg}")
                     if msg:
-                        if msg == DISCONNNECT_MESSAGE:
+                        if msg.type == MessageType.DISCONNNECT_MESSAGE:
+                            msg: DisconnectMessage
                             self._connections[uuid].active = False
-                        self._connections[uuid].messages.append(
-                            Message(incoming=True, text=msg)
-                        )
+                        elif msg.type == MessageType.CHAT_MESSAGE:
+                            msg: ChatMessage
+                            self._connections[uuid].messages.append(
+                                ChatMessage(incoming=True, text=msg.text)
+                            )
+                        else:
+                            pass
                     else:
                         continue
                 except IOError as ex:
                     if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
-                        break
+                        self.disconnect(uuid=uuid)
                     print(f"IOError handled: {ex}")
                     continue
                 except Exception as ex:
+                    if not self._connections[uuid].active:
+                        # if know connection is closed
+                        continue
                     print(f"Exception when handling connection {ex}")
-                    break
-        self._connections[uuid].active = False
+                    print(traceback.format_exc())
+                    self.disconnect(uuid=uuid)
 
     def _add_handler_thread(self, conn: socket.socket, addr: Tuple) -> Thread:
         uuid = Peer.get_uuid(length=UUID_LENGTH)
@@ -181,19 +305,19 @@ class Peer:
                 try:
                     # TODO: use data which can be neighbors' neighbor and encryption etc.
                     data, addr = Peer._udp_get_payload(conn=s)
-                    if data == DISCOVER_QUESTION:
+                    if data == MessageType.DISCOVER_QUESTION:
                         if addr[0] == self.host:
                             continue
                         print(f"Got discover question from {addr}")
                         s.sendto(
                             Peer.wrap_payload(
-                                payload=DISCOVER_ANSWER,
+                                payload=MessageType.DISCOVER_ANSWER,
                                 header_length=UDP_HEADER,
                             ),
                             (addr[0], UDP_PORT)
                         )
                         print("Discover answer sent")
-                    elif data == DISCOVER_ANSWER:
+                    elif data == MessageType.DISCOVER_ANSWER:
                         print(f"New neighbor found! {addr[0]}:{TCP_PORT}")
                         self._near_neighbors.add(f"{addr[0]}:{TCP_PORT}")
                     else:
@@ -238,15 +362,18 @@ class Peer:
             print(f"Exception when connecting to {addr}: {ex}")
             return False
 
-    def disconnect(self, uuid) -> Optional[bool]:
+    def disconnect(self, uuid: str) -> Optional[bool]:
         if uuid in self._connections:
             pcon = self._connections[uuid]
         else:
             print(f"Connection uuid does not exist: {uuid}")
             return False
+        if not pcon.active:
+            return True
         try:
             pcon.active = False
-            pcon.conn.sendall(Peer.wrap_payload(payload=DISCONNNECT_MESSAGE))
+            message = DisconnectMessage()
+            self.send_message(message=message, conn=pcon.conn)
         except IOError as ex:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
@@ -268,7 +395,34 @@ class Peer:
             return None
         return True
 
-    def chat(self, uuid) -> bool:
+    @staticmethod
+    def decrypt(cipher: bytes, key: str) -> bytes:
+        pass
+
+    @staticmethod
+    def encrypt(plain: bytes, key: str) -> bytes:
+        pass
+
+    @staticmethod
+    def get_payload(data: Dict, encryption_key: Optional[str] = None) -> bytes:
+        payload = pickle.dumps(obj=data, protocol=pickle.DEFAULT_PROTOCOL)
+        if encryption_key:
+            payload = Peer.encrypt(plain=payload, key=encryption_key)
+        return payload
+
+    @staticmethod
+    def send_message(message: Message, conn: socket.socket) -> bool:
+        data = message.get_data()
+        print(f"data in send_message: {data}")
+        payload = Peer.get_payload(data=data)
+        print(f"payload in send_message: {payload}")
+        prepared_message = Peer.wrap_payload(
+            payload=payload)
+        print(f"prepared_message in send_message: {prepared_message}")
+        conn.sendall(prepared_message)
+        return True
+
+    def chat(self, uuid: str) -> bool:
         if uuid in self._connections:
             conn = self._connections[uuid].conn
             print(f"Chatting With {uuid}")
@@ -298,12 +452,14 @@ class Peer:
                                 print(m)
                         else:
                             if self._connections[uuid].active:
-                                prepared_message = Peer.wrap_payload(
-                                    payload=raw_message)
-                                conn.sendall(prepared_message)
-                                self._connections[uuid].messages.append(
-                                    Message(incoming=False, text=raw_message)
-                                )
+                                message = ChatMessage(
+                                    incoming=False, text=raw_message)
+                                if self.send_message(
+                                    message=message,
+                                    conn=conn,
+                                ):
+                                    self._connections[uuid].messages.append(
+                                        message)
                             else:
                                 print(
                                     "Connection is ended, only recent messages can be seen")
@@ -357,7 +513,7 @@ class Peer:
             print("Sending UDP braodcast message")
             s.sendto(
                 Peer.wrap_payload(
-                    payload=DISCOVER_QUESTION,
+                    payload=MessageType.DISCOVER_QUESTION,
                     header_length=UDP_HEADER
                 ),
                 ('255.255.255.255', self.udp_port)
@@ -383,10 +539,12 @@ class Peer:
         except Exception as ex:
             print(f"Exception when ending peer UDP connection: {ex}")
         for pcon in self._connections.values():
+            if not pcon.active:
+                continue
             try:
                 pcon.active = False
-                pcon.conn.sendall(Peer.wrap_payload(
-                    payload=DISCONNNECT_MESSAGE))
+                message = DisconnectMessage()
+                self.send_message(message=message, conn=pcon.conn)
             except IOError as ex:
                 if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                     pass
