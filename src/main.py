@@ -1,4 +1,5 @@
 # import random
+import logging
 import socket
 import sys
 import os
@@ -8,6 +9,15 @@ from peer import TCP_PORT, UDP_PORT, Peer
 SERVER = socket.gethostbyname(socket.gethostname())
 DISCOVER_SLEEP_TIME = 2
 
+logger = logging.getLogger("p2p_messenger")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LEVEL = getattr(logging, LOG_LEVEL, "INFO")
+logger.setLevel(level=LEVEL)
+handler = logging.StreamHandler()
+formatter = logging.Formatter(
+    fmt="[%(asctime)s - %(levelname)s - %(name)s] %(message)s")
+handler.setFormatter(fmt=formatter)
+logger.addHandler(hdlr=handler)
 
 if __name__ == '__main__':
     mypeer = Peer(host=SERVER, tcp_port=TCP_PORT, udp_port=UDP_PORT)
@@ -37,17 +47,18 @@ if __name__ == '__main__':
                             continue
                         mypeer.connect((host, port))
                     except Exception as ex:
-                        print(f"Couldn't connect: {ex}")
+                        logger.error(f"Couldn't connect: {ex}")
                 elif words[0] == r"\d" or words[0] == r"\disconnect":
                     try:
                         if len(words[1:]) == 1:
                             uuid = words[1]
                             mypeer.disconnect(uuid=uuid)
                         else:
-                            print(f"Command '{words[0]}' gets 1 arguement")
+                            logger.warning(
+                                f"Command '{words[0]}' gets 1 arguement")
                             continue
                     except Exception as ex:
-                        print(f"Couldn't perform disconnection: {ex}")
+                        logger.error(f"Couldn't perform disconnection: {ex}")
                 elif words[0] == r"\me":
                     me = mypeer.get_me()
                     print(f"My Info: {me}")
@@ -80,7 +91,7 @@ if __name__ == '__main__':
                             # TODO: show correct usage
                             continue
                     except Exception as ex:
-                        print(f"Couldn't start chat: {ex}")
+                        logger.error(f"Couldn't start chat: {ex}")
                 elif words[0] == r"\discover":
                     mypeer.discover()
                     sleep(DISCOVER_SLEEP_TIME)
@@ -101,5 +112,3 @@ if __name__ == '__main__':
         except KeyboardInterrupt:
             print()
             pass
-            # ACTIVE = False
-            # mypeer.end_forcefully()

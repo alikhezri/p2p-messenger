@@ -5,6 +5,7 @@ import socket
 import random
 import string
 import pickle
+import logging
 from threading import Thread
 from time import sleep
 from datetime import datetime
@@ -24,6 +25,8 @@ DEFAULT_TAIL_LENGTH = 20
 DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 PRE_CONNECTION_CLOSE_SLEEP_TIME = 1.5
 IP_MULTICAST_TTL = 1
+
+logger = logging.getLogger("p2p_messenger")
 
 
 class MessageType(enum.Enum):
@@ -50,14 +53,14 @@ class Message(ABC):
     def _get_clean_data_func(cls, attributes: List[str] = []) -> Callable[[Dict], Optional[Dict]]:
         def _clean_data(data: Dict) -> Optional[Dict]:
             cleaned_data = {}
-            print(f"attributes: {attributes}")
-            print(f"data: {data}")
+            logger.debug(f"attributes: {attributes}")
+            logger.debug(f"data: {data}")
             for attr in attributes:
                 if attr in data:
                     cleaned_data[attr] = data[attr]
                 else:
                     return False
-            print(f"cleaned_data {cleaned_data}")
+            logger.debug(f"cleaned_data {cleaned_data}")
             return cleaned_data
         return _clean_data
 
@@ -190,7 +193,7 @@ class Peer:
                 payload = conn.recv(payload_length)
                 return payload
             except Exception as ex:
-                print(f"Exception wehen getting TCP payload: {ex}")
+                logger.error(f"Exception wehen getting TCP payload: {ex}")
                 return False
         else:
             # TODO: DEBUG log
@@ -207,10 +210,10 @@ class Peer:
                 payload = packet_bytes[header_length:header_length+payload_length]
                 return payload, addr
             except Exception as ex:
-                print(f"Exception wehen getting UDP payload: {ex}")
+                logger.error(f"Exception wehen getting UDP payload: {ex}")
                 return None, None
         else:
-            print(f"No UDP payload_length_str: {payload_length_str}")
+            logger.warning(f"No UDP payload_length_str: {payload_length_str}")
             return None, None
 
     @staticmethod
@@ -223,16 +226,17 @@ class Peer:
                 raise Exception("Failed To Load Data")
             return data
         except Exception as ex:
-            print(f"Exception when getting dict data: {ex}")
+            logger.error(f"Exception when getting dict data: {ex}")
             return False
 
     @staticmethod
     def get_message(data: Dict) -> Message:
         MessageClass: Type[Message] = MESSAGE_TYPE_TO_CLASS_MAPPING[data['type']]
-        print(MessageClass)
+        logger.debug(MessageClass)
         clean_data = MessageClass.clean_data(data=data)
         if clean_data == False:
-            print(f"Could not create message from received data: {data}")
+            logger.debug(
+                f"Could not create message from received data: {data}")
             raise Exception(f"Message Parse Exception with data: {data}")
         else:
             return MessageClass(**clean_data)
@@ -241,14 +245,14 @@ class Peer:
     def receive_tcp_message(conn: socket.socket) -> Optional[Message]:
         payload = Peer.tcp_get_payload(conn=conn)
         if not payload:
-            print("No Payload in receive_message")
+            logger.debug("No Payload in receive_message")
             raise Exception("Payload receive Exception")
-        print(f"payload in receive_message: {payload}")
+        logger.debug(f"payload in receive_message: {payload}")
         data = Peer.extract_payload(payload=payload)
         if not data:
-            print("No data in receive_message")
+            logger.debug("No data in receive_message")
             raise Exception("Data receive Exception")
-        print(f"data in receive_message: {data}")
+        logger.debug(f"data in receive_message: {data}")
         message = Peer.get_message(data)
         return message
 
@@ -256,9 +260,7 @@ class Peer:
         with conn:
             while self._connections[uuid].active:
                 try:
-                    # msg = Peer._tcp_get_payload(conn=conn)
                     msg = Peer.receive_tcp_message(conn=conn)
-                    # print(f"Var 'message' in 'handle_connection': {msg}")
                     if msg:
                         if msg.type == MessageType.DISCONNNECT_MESSAGE:
                             msg: DisconnectMessage
@@ -275,14 +277,14 @@ class Peer:
                 except IOError as ex:
                     if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                         self.disconnect(uuid=uuid)
-                    print(f"IOError handled: {ex}")
+                    logger.warning(f"IOError handled: {ex}")
                     continue
                 except Exception as ex:
                     if not self._connections[uuid].active:
                         # if know connection is closed
                         continue
-                    print(f"Exception when handling connection {ex}")
-                    print(traceback.format_exc())
+                    logger.error(f"Exception when handling connection {ex}")
+                    logger.debug(traceback.format_exc())
                     self.disconnect(uuid=uuid)
 
     def _add_handler_thread(self, conn: socket.socket, addr: Tuple) -> Thread:
@@ -315,23 +317,23 @@ class Peer:
                 except IOError as ex:
                     if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                         return
-                    print(f"IOError handled: {ex}")
+                    logger.warning(f"IOError handled: {ex}")
                     continue
                 except Exception as ex:
-                    print(f"Couldn't listen: {ex}")
+                    logger.error(f"Couldn't listen: {ex}")
 
     @staticmethod
     def receive_udp_message(conn: socket.socket) -> Tuple[Optional[Message], Optional[Tuple[str, int]]]:
         payload, addr = Peer.udp_get_payload(conn=conn)
         if not payload:
-            print("No Payload in receive_message")
+            logger.debug("No Payload in receive_message")
             raise Exception("Payload receive Exception")
-        print(f"payload in receive_message: {payload}")
+        logger.debug(f"payload in receive_message: {payload}")
         data = Peer.extract_payload(payload=payload)
         if not data:
-            print("No data in receive_message")
+            logger.debug("No data in receive_message")
             raise Exception("Data receive Exception")
-        print(f"data in receive_message: {data}")
+        logger.debug(f"data in receive_message: {data}")
         message = Peer.get_message(data)
         return message, addr
 
@@ -346,26 +348,27 @@ class Peer:
                     if message.type == MessageType.DISCOVER_QUESTION:
                         if addr[0] == self.host:
                             continue
-                        print(f"Got discover question from {addr}")
+                        logger.debug(f"Got discover question from {addr}")
                         answer_msg = DiscoverAnswer()
                         self.send_udp_message(
                             message=answer_msg,
                             conn=s,
                             to=(addr[0], UDP_PORT),
                         )
-                        print("Discover answer sent")
+                        logger.debug("Discover answer sent")
                     elif message.type == MessageType.DISCOVER_ANSWER:
-                        print(f"New neighbor found! {addr[0]}:{TCP_PORT}")
+                        logger.debug(
+                            f"New neighbor found! {addr[0]}:{TCP_PORT}")
                         self._near_neighbors.add(f"{addr[0]}:{TCP_PORT}")
                     else:
-                        print(f"Got unknown UDP message: {message}")
+                        logger.debug(f"Got unknown UDP message: {message}")
                 except IOError as ex:
                     if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                         return
-                    print(f"IOError handled: {ex}")
+                    logger.warning(f"IOError handled: {ex}")
                     continue
                 except Exception as ex:
-                    print(f"Couldn't listen: {ex}")
+                    logger.error(f"Couldn't listen: {ex}")
                     continue
 
     def start(self) -> bool:
@@ -384,7 +387,7 @@ class Peer:
             udp_listen_thread.start()
             return True
         except Exception as ex:
-            print(f"Exception when in 'start': {ex}")
+            logger.error(f"Exception when in 'start': {ex}")
             return False
 
     def get_me(self):
@@ -397,7 +400,7 @@ class Peer:
             self._add_handler_thread(conn=conn, addr=addr)
             return conn
         except Exception as ex:
-            print(f"Exception when connecting to {addr}: {ex}")
+            logger.error(f"Exception when connecting to {addr}: {ex}")
             return False
 
     def disconnect(self, uuid: str) -> Optional[bool]:
@@ -416,9 +419,10 @@ class Peer:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
             else:
-                print(f"IOError handled: {ex}")
+                logger.warning(f"IOError handled: {ex}")
         except Exception as ex:
-            print(f"Exception when disconnecting connection {uuid}: {ex}")
+            logger.error(
+                f"Exception when disconnecting connection {uuid}: {ex}")
             return None
         sleep(PRE_CONNECTION_CLOSE_SLEEP_TIME)
         try:
@@ -427,9 +431,9 @@ class Peer:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
             else:
-                print(f"IOError handled: {ex}")
+                logger.warning(f"IOError handled: {ex}")
         except Exception as ex:
-            print(f"Exception when ending peer connection: {ex}")
+            logger.error(f"Exception when ending peer connection: {ex}")
             return None
         return True
 
@@ -451,12 +455,12 @@ class Peer:
     @staticmethod
     def send_tcp_message(message: Message, conn: socket.socket) -> bool:
         data = message.get_data()
-        print(f"data in send_message: {data}")
+        logger.debug(f"data in send_message: {data}")
         payload = Peer.get_payload(data=data)
-        print(f"payload in send_message: {payload}")
+        logger.debug(f"payload in send_message: {payload}")
         prepared_message = Peer.wrap_payload(
             payload=payload)
-        print(f"prepared_message in send_message: {prepared_message}")
+        logger.debug(f"prepared_message in send_message: {prepared_message}")
         conn.sendall(prepared_message)
         return True
 
@@ -480,8 +484,10 @@ class Peer:
                                     messages = self._connections[uuid].get_messages(
                                         tail=tail)
                                 except Exception as ex:
-                                    print(
+                                    logger.debug(
                                         f"Tail's second parameter should be number: {splitted_raw_message[1]}")
+                                    logger.error(
+                                        f"Exception for tail command in chat: {ex}")
                                     continue
                             else:
                                 messages = self._connections[uuid].get_messages(
@@ -507,10 +513,10 @@ class Peer:
                     print()
                     continue
                 except Exception as ex:
-                    print(f"Exception when chatting with {uuid}: {ex}")
+                    logger.error(f"Exception when chatting with {uuid}: {ex}")
             return True
         else:
-            print(f"Connection with UUID does not exist: {uuid}")
+            logger.warning(f"Connection with UUID does not exist: {uuid}")
             return None
 
     def list_actives(self) -> List:
@@ -535,12 +541,12 @@ class Peer:
     @staticmethod
     def send_udp_message(message: Message, conn: socket.socket, to: Tuple[str, int]) -> bool:
         data = message.get_data()
-        print(f"data in send_message: {data}")
+        logger.debug(f"data in send_message: {data}")
         payload = Peer.get_payload(data=data)
-        print(f"payload in send_message: {payload}")
+        logger.debug(f"payload in send_message: {payload}")
         prepared_message = Peer.wrap_payload(
             payload=payload, header_length=UDP_HEADER)
-        print(f"prepared_message in send_message: {prepared_message}")
+        logger.debug(f"prepared_message in send_message: {prepared_message}")
         conn.sendto(prepared_message, to)
         return True
 
@@ -554,16 +560,16 @@ class Peer:
         #         s.bind((ip,0))
         #         s.sendto(Peer.wrap_payload(payload=DISCOVER_QUESTION), ('255.255.255.255', self.udp_port))
         self._near_neighbors = set()
-        print("Creating UDP socket for broadcast")
+        logger.debug("Creating UDP socket for broadcast")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as s:
-            print("Setting options for UDP broadcast")
+            logger.debug("Setting options for UDP broadcast")
             s.setsockopt(
                 socket.SOL_SOCKET,
                 socket.SO_BROADCAST,
                 IP_MULTICAST_TTL
             )
             s.bind((self.host, 0))
-            print("Sending UDP braodcast message")
+            logger.debug("Sending UDP braodcast message")
             message = DiscoverQuestion()
             self.send_udp_message(
                 message=message,
@@ -578,18 +584,18 @@ class Peer:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
             else:
-                print(f"IOError handled when closing TCP: {ex}")
+                logger.warning(f"IOError handled when closing TCP: {ex}")
         except Exception as ex:
-            print(f"Exception when ending peer TCP connection: {ex}")
+            logger.error(f"Exception when ending peer TCP connection: {ex}")
         try:
             self._udp_listen_socket.close()
         except IOError as ex:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
             else:
-                print(f"IOError handled when closing UDP: {ex}")
+                logger.warning(f"IOError handled when closing UDP: {ex}")
         except Exception as ex:
-            print(f"Exception when ending peer UDP connection: {ex}")
+            logger.error(f"Exception when ending peer UDP connection: {ex}")
         for pcon in self._connections.values():
             if not pcon.active:
                 continue
@@ -601,9 +607,9 @@ class Peer:
                 if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                     pass
                 else:
-                    print(f"IOError handled: {ex}")
+                    logger.warning(f"IOError handled: {ex}")
             except Exception as ex:
-                print(f"Exception when ending peer connection: {ex}")
+                logger.error(f"Exception when ending peer connection: {ex}")
         sleep(PRE_CONNECTION_CLOSE_SLEEP_TIME)
         for pcon in self._connections.values():
             try:
@@ -612,9 +618,9 @@ class Peer:
                 if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                     pass
                 else:
-                    print(f"IOError handled: {ex}")
+                    logger.warning(f"IOError handled: {ex}")
             except Exception as ex:
-                print(f"Exception when ending peer connection: {ex}")
+                logger.error(f"Exception when ending peer connection: {ex}")
 
     def end_forcefully(self) -> None:
         try:
@@ -623,18 +629,18 @@ class Peer:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
             else:
-                print(f"IOError handled when closing TCP: {ex}")
+                logger.warning(f"IOError handled when closing TCP: {ex}")
         except Exception as ex:
-            print(f"Exception when ending peer TCP connection: {ex}")
+            logger.error(f"Exception when ending peer TCP connection: {ex}")
         try:
             self._udp_listen_socket.close()
         except IOError as ex:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
             else:
-                print(f"IOError handled when closing UDP: {ex}")
+                logger.warning(f"IOError handled when closing UDP: {ex}")
         except Exception as ex:
-            print(f"Exception when ending peer UDP connection: {ex}")
+            logger.error(f"Exception when ending peer UDP connection: {ex}")
         for pcon in self._connections.values():
             try:
                 pcon.active = False
@@ -643,6 +649,6 @@ class Peer:
                 if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                     pass
                 else:
-                    print(f"IOError handled: {ex}")
+                    logger.warning(f"IOError handled: {ex}")
             except Exception as ex:
-                print(f"Exception when ending peer: {ex}")
+                logger.error(f"Exception when ending peer: {ex}")
