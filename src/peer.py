@@ -12,6 +12,12 @@ from datetime import datetime
 import traceback
 from typing import Callable, Dict, List, Optional, Tuple, Type
 
+from exceptions import (
+    ReceiveMessageException,
+    ReceiveTCPMessageException,
+    ReceiveUDPMessageException
+)
+
 TCP_PORT = 3434
 UDP_PORT = 5151
 
@@ -196,8 +202,8 @@ class Peer:
                 logger.error(f"Exception wehen getting TCP payload: {ex}")
                 return False
         else:
-            # TODO: DEBUG log
-            raise Exception(f"No TCP payload_length_str: {payload_length_str}")
+            raise Exception(
+                f"No TCP payload_length_str: '{payload_length_str}'")
 
     @staticmethod
     def udp_get_payload(conn: socket.socket, header_length: int = UDP_HEADER, body_length: int = UDP_BODY) -> Tuple[Optional[bytes], Optional[Tuple[str, int]]]:
@@ -223,10 +229,10 @@ class Peer:
         try:
             data = pickle.loads(data=payload, encoding=ENCODING)
             if not type(data) == dict:
-                raise Exception("Failed To Load Data")
+                raise Exception("Failed to get Dict data")
             return data
         except Exception as ex:
-            logger.error(f"Exception when getting dict data: {ex}")
+            logger.error(f"Exception when getting data: {ex}")
             return False
 
     @staticmethod
@@ -237,7 +243,8 @@ class Peer:
         if clean_data == False:
             logger.debug(
                 f"Could not create message from received data: {data}")
-            raise Exception(f"Message Parse Exception with data: {data}")
+            raise ReceiveTCPMessageException(
+                f"Message Parse Exception with data: {data}")
         else:
             return MessageClass(**clean_data)
 
@@ -246,12 +253,12 @@ class Peer:
         payload = Peer.tcp_get_payload(conn=conn)
         if not payload:
             logger.debug("No Payload in receive_message")
-            raise Exception("Payload receive Exception")
+            raise ReceiveTCPMessageException("Payload receive Exception")
         logger.debug(f"payload in receive_message: {payload}")
         data = Peer.extract_payload(payload=payload)
         if not data:
             logger.debug("No data in receive_message")
-            raise Exception("Data receive Exception")
+            raise ReceiveTCPMessageException("Data receive Exception")
         logger.debug(f"data in receive_message: {data}")
         message = Peer.get_message(data)
         return message
@@ -278,6 +285,10 @@ class Peer:
                     if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                         self.disconnect(uuid=uuid)
                     logger.warning(f"IOError handled: {ex}")
+                    continue
+                except ReceiveMessageException as ex:
+                    logger.warning(
+                        f"Exception when receiving TCP messge: {ex}")
                     continue
                 except Exception as ex:
                     if not self._connections[uuid].active:
@@ -327,12 +338,12 @@ class Peer:
         payload, addr = Peer.udp_get_payload(conn=conn)
         if not payload:
             logger.debug("No Payload in receive_message")
-            raise Exception("Payload receive Exception")
+            raise ReceiveUDPMessageException("Payload receive Exception")
         logger.debug(f"payload in receive_message: {payload}")
         data = Peer.extract_payload(payload=payload)
         if not data:
             logger.debug("No data in receive_message")
-            raise Exception("Data receive Exception")
+            raise ReceiveUDPMessageException("Data receive Exception")
         logger.debug(f"data in receive_message: {data}")
         message = Peer.get_message(data)
         return message, addr
@@ -366,6 +377,10 @@ class Peer:
                     if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                         return
                     logger.warning(f"IOError handled: {ex}")
+                    continue
+                except ReceiveMessageException as ex:
+                    logger.warning(
+                        f"Exception when receiving UDP messge: {ex}")
                     continue
                 except Exception as ex:
                     logger.error(f"Couldn't listen: {ex}")
