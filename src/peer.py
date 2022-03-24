@@ -13,10 +13,14 @@ import traceback
 from typing import Callable, Dict, List, Optional, Tuple, Type
 
 from exceptions import (
+    HandshakeException,
     ReceiveMessageException,
     ReceiveTCPMessageException,
-    ReceiveUDPMessageException
+    ReceiveUDPMessageException,
+    TransceiveHandshakeAckException,
+    TransceiveHandshakeKeyException,
 )
+import crypto
 
 TCP_PORT = 3434
 UDP_PORT = 5151
@@ -183,6 +187,7 @@ class PeerConnection:
         self.host = host
         self.port = port
         self.messages: List[ChatMessage] = []
+        self.public_key: Optional[crypto.RSA.RsaKey] = None
 
     def get_messages(self, tail: int = DEFAULT_TAIL_LENGTH, time_format: str = DEFAULT_TIME_FORMAT) -> List[str]:
         messages = self.messages[-tail:]
@@ -206,6 +211,9 @@ class Peer:
         self._udp_listen_socket: socket.socket = None
         self._connections: Dict[str, PeerConnection] = {}
         self._near_neighbors = set()
+        self.public_key: crypto.RSA.RsaKey
+        self.private_key: crypto.RSA.RsaKey
+        self.public_key, self.private_key = crypto.generate_keys()
 
     @staticmethod
     def get_uuid(length=64) -> str:
@@ -283,13 +291,16 @@ class Peer:
             return MessageClass(**clean_data)
 
     @staticmethod
-    def receive_tcp_message(conn: socket.socket) -> Optional[Message]:
+    def receive_tcp_message(conn: socket.socket, key: Optional[crypto.RSA.RsaKey] = None) -> Optional[Message]:
         payload = Peer.tcp_get_payload(conn=conn)
         if not payload:
             logger.debug("No Payload in receive_message")
             raise ReceiveTCPMessageException("Payload receive Exception")
         logger.debug(f"payload in receive_message: {payload}")
-        data = Peer.extract_payload(payload=payload)
+        data = Peer.extract_payload(
+            payload=payload,
+            encryption_key=key
+        )
         if not data:
             logger.debug("No data in receive_message")
             raise ReceiveTCPMessageException("Data receive Exception")
@@ -297,11 +308,50 @@ class Peer:
         message = Peer.get_message(data)
         return message
 
+    def handshake(self, conn: socket.socket, uuid: str) -> None:
+        key_send_msg = KeySendMessage(
+            key=crypto.serialize_key(self.public_key))
+        Peer.send_tcp_message(message=key_send_msg, conn=conn)
+
+        key_receive_msg: KeySendMessage = Peer.receive_tcp_message(conn=conn)
+        if not key_receive_msg:
+            raise TransceiveHandshakeKeyException("Get key failed")
+        if key_receive_msg.type == MessageType.KEY_SEND_MESSAGE:
+            key = crypto.load_key(key_receive_msg.key)
+            self._connections[uuid].public_key = key
+        else:
+            raise TransceiveHandshakeKeyException("Excpected key")
+
+        key_ack_send_msg = KeyAckMessage()
+        Peer.send_tcp_message(message=key_ack_send_msg, conn=conn)
+
+        key_ack_rcv_msg: KeyAckMessage = Peer.receive_tcp_message(conn=conn)
+        if not key_ack_rcv_msg:
+            raise TransceiveHandshakeAckException("Get ack failed")
+        if key_ack_rcv_msg.type == MessageType.KEY_ACK_MESSAGE:
+            pass
+        else:
+            raise TransceiveHandshakeAckException("Ack failed")
+
     def handle_connection(self, conn: socket.socket, uuid: str) -> None:
         with conn:
+            try:
+                self.handshake(
+                    conn=conn,
+                    uuid=uuid,
+                )
+            except HandshakeException as ex:
+                logger.debug(f"Couldn't perform handshake: {ex}")
+                raise Exception("Handshake failed")
+            except Exception as ex:
+                logger.debug(traceback.format_exc())
+                self.disconnect(uuid=uuid)
             while self._connections[uuid].active:
                 try:
-                    msg = Peer.receive_tcp_message(conn=conn)
+                    msg = Peer.receive_tcp_message(
+                        conn=conn,
+                        key=self.private_key,
+                    )
                     if msg:
                         if msg.type == MessageType.DISCONNNECT_MESSAGE:
                             msg: DisconnectMessage
@@ -463,7 +513,11 @@ class Peer:
         try:
             pcon.active = False
             message = DisconnectMessage()
-            self.send_tcp_message(message=message, conn=pcon.conn)
+            self.send_tcp_message(
+                message=message,
+                conn=pcon.conn,
+                key=pcon.public_key
+            )
         except IOError as ex:
             if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                 pass
@@ -488,24 +542,28 @@ class Peer:
 
     @staticmethod
     def decrypt(cipher: bytes, key: str) -> bytes:
-        pass
+        return crypto.decrypt_bytes(enc_payload=cipher, key=key)
 
     @staticmethod
     def encrypt(plain: bytes, key: str) -> bytes:
-        pass
+        return crypto.encrypt_bytes(payload=plain, key=key)
 
     @staticmethod
     def get_payload(data: Dict, encryption_key: Optional[str] = None) -> bytes:
         payload = pickle.dumps(obj=data, protocol=pickle.DEFAULT_PROTOCOL)
         if encryption_key:
+            logger.debug(f"Pickled Data Before Enc: {payload}")
             payload = Peer.encrypt(plain=payload, key=encryption_key)
         return payload
 
     @staticmethod
-    def send_tcp_message(message: Message, conn: socket.socket) -> bool:
+    def send_tcp_message(message: Message, conn: socket.socket, key: Optional[crypto.RSA.RsaKey] = None) -> bool:
         data = message.get_data()
         logger.debug(f"data in send_message: {data}")
-        payload = Peer.get_payload(data=data)
+        payload = Peer.get_payload(
+            data=data,
+            encryption_key=key
+        )
         logger.debug(f"payload in send_message: {payload}")
         prepared_message = Peer.wrap_payload(
             payload=payload)
@@ -554,6 +612,7 @@ class Peer:
                                 if self.send_tcp_message(
                                     message=message,
                                     conn=conn,
+                                    key=self._connections[uuid].public_key,
                                 ):
                                     self._connections[uuid].messages.append(
                                         message)
@@ -656,7 +715,11 @@ class Peer:
             try:
                 pcon.active = False
                 message = DisconnectMessage()
-                self.send_tcp_message(message=message, conn=pcon.conn)
+                self.send_tcp_message(
+                    message=message,
+                    conn=pcon.conn,
+                    key=pcon.public_key,
+                )
             except IOError as ex:
                 if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                     pass
