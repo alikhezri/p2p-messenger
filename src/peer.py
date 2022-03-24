@@ -37,11 +37,12 @@ logger = logging.getLogger("p2p_messenger")
 
 class MessageType(enum.Enum):
     ABSTRACT_MESSAGE = 0
-    CONNECT_MESSAGE = 10
     CHAT_MESSAGE = 11
     DISCONNNECT_MESSAGE = 12
     DISCOVER_QUESTION = 31
     DISCOVER_ANSWER = 32
+    KEY_SEND_MESSAGE = 41
+    KEY_ACK_MESSAGE = 42
 
 
 class Message(ABC):
@@ -94,6 +95,35 @@ class ChatMessage(Message):
         return cls._get_clean_data_func(attributes=['text', ])(data=data)
 
 
+class KeySendMessage(Message):
+    def __init__(self, key: str) -> None:
+        super().__init__()
+        self.key = key
+
+    def get_data(self) -> Dict:
+        return {
+            "type": self.type,
+            "time": self.time,
+            "key": self.key,
+        }
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=['key', ])(data=data)
+
+
+class KeyAckMessage(Message):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_data(self) -> Dict:
+        return super().get_data()
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=[])(data=data)
+
+
 class DisconnectMessage(Message):
     def __init__(self) -> None:
         super().__init__()
@@ -136,6 +166,8 @@ MESSAGE_CLASS_TO_TYPE_MAPPING = {
     DisconnectMessage: MessageType.DISCONNNECT_MESSAGE,
     DiscoverQuestion: MessageType.DISCOVER_QUESTION,
     DiscoverAnswer: MessageType.DISCOVER_ANSWER,
+    KeySendMessage: MessageType.KEY_SEND_MESSAGE,
+    KeyAckMessage: MessageType.KEY_ACK_MESSAGE,
 }
 
 MESSAGE_TYPE_TO_CLASS_MAPPING = {
