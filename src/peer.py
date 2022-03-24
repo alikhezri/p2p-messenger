@@ -523,26 +523,30 @@ class Peer:
                     raw_message = input(f"You: > ")
                     splitted_raw_message = raw_message.split()
                     if raw_message:
-                        if splitted_raw_message[0] == r"\b" or splitted_raw_message[0] == r"\back":
-                            CHAT_MODE = False
-                            continue
-                        elif splitted_raw_message[0] == r"\t" or splitted_raw_message[0] == r"\tail":
-                            if len(splitted_raw_message) == 2:
-                                try:
-                                    tail = int(splitted_raw_message[1])
+                        if raw_message[0] == "\\":
+                            if splitted_raw_message[0] == r"\b" or splitted_raw_message[0] == r"\back":
+                                CHAT_MODE = False
+                                continue
+                            elif splitted_raw_message[0] == r"\t" or splitted_raw_message[0] == r"\tail":
+                                if len(splitted_raw_message) == 2:
+                                    try:
+                                        tail = int(splitted_raw_message[1])
+                                        messages = self._connections[uuid].get_messages(
+                                            tail=tail)
+                                    except Exception as ex:
+                                        logger.debug(
+                                            f"Tail's second parameter should be number: {splitted_raw_message[1]}")
+                                        logger.error(
+                                            f"Exception for tail command in chat: {ex}")
+                                        continue
+                                else:
                                     messages = self._connections[uuid].get_messages(
-                                        tail=tail)
-                                except Exception as ex:
-                                    logger.debug(
-                                        f"Tail's second parameter should be number: {splitted_raw_message[1]}")
-                                    logger.error(
-                                        f"Exception for tail command in chat: {ex}")
-                                    continue
+                                    )
+                                for m in messages:
+                                    print(m)
                             else:
-                                messages = self._connections[uuid].get_messages(
-                                )
-                            for m in messages:
-                                print(m)
+                                print(
+                                    f"Command '{splitted_raw_message[0]}' does not exist")
                         else:
                             if self._connections[uuid].active:
                                 message = ChatMessage(
