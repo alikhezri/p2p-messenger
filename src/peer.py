@@ -258,6 +258,7 @@ class Peer:
     def extract_payload(payload: bytes, encryption_key: Optional[str] = None) -> Optional[Dict]:
         if encryption_key:
             payload = Peer.decrypt(cipher=payload, key=encryption_key)
+            logger.debug(f"Unpickled Data After Decr: {payload}")
         try:
             data = pickle.loads(data=payload, encoding=ENCODING)
             if not type(data) == dict:
@@ -265,6 +266,7 @@ class Peer:
             return data
         except Exception as ex:
             logger.error(f"Exception when getting data: {ex}")
+            logger.debug(traceback.format_exc())
             return False
 
     @staticmethod
@@ -561,6 +563,7 @@ class Peer:
                     continue
                 except Exception as ex:
                     logger.error(f"Exception when chatting with {uuid}: {ex}")
+                    logger.debug(traceback.format_exc())
             return True
         else:
             logger.warning(f"Connection with UUID does not exist: {uuid}")
