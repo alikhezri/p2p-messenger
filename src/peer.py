@@ -354,12 +354,12 @@ class Peer:
                     )
                     if msg:
                         if msg.type == MessageType.DISCONNNECT_MESSAGE:
-                            msg: DisconnectMessage
+                            dis_msg: DisconnectMessage = msg
                             self._connections[uuid].active = False
                         elif msg.type == MessageType.CHAT_MESSAGE:
-                            msg: ChatMessage
+                            chat_msg: ChatMessage = msg
                             self._connections[uuid].messages.append(
-                                ChatMessage(incoming=True, text=msg.text)
+                                ChatMessage(incoming=True, text=chat_msg.text)
                             )
                         else:
                             pass
