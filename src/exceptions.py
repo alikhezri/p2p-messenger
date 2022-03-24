@@ -17,3 +17,24 @@ class ReceiveUDPMessageException(ReceiveMessageException):
 
     def __str__(self) -> str:
         return super().__str__()
+
+
+class HandshakeException(Exception):
+    """Raised when could not handshake successfully"""
+
+    def __str__(self) -> str:
+        return super().__str__()
+
+
+class TransceiveHandshakeKeyException(HandshakeException):
+    """Raised when could transceive handshake ack successfully"""
+
+    def __str__(self) -> str:
+        return super().__str__()
+
+
+class TransceiveHandshakeAckException(HandshakeException):
+    """Raised when could transceive handshake key successfully"""
+
+    def __str__(self) -> str:
+        return super().__str__()
