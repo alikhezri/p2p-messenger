@@ -7,7 +7,6 @@ from time import sleep
 from typing import List, Tuple
 from peer import TCP_PORT, UDP_PORT, Peer
 
-SERVER = socket.gethostbyname(socket.gethostname())
 DISCOVER_SLEEP_TIME = 2
 
 logger = logging.getLogger("p2p_messenger")
@@ -28,8 +27,20 @@ def print_uuid_addrs(uuid_addrs: List[Tuple[str, str]]):
         print(f"\t{number}) {uuid} at {addr}")
 
 
+def get_host_ip():
+    st = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        st.connect(('10.255.255.255', 1))
+        IP = st.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        st.close()
+    return IP
+
+
 if __name__ == '__main__':
-    mypeer = Peer(host=SERVER, tcp_port=TCP_PORT, udp_port=UDP_PORT)
+    mypeer = Peer(host=get_host_ip(), tcp_port=TCP_PORT, udp_port=UDP_PORT)
     if not mypeer.start():
         sys.exit(os.EX_IOERR)
     ACTIVE = True
@@ -75,10 +86,12 @@ if __name__ == '__main__':
                 elif words[0] == r"\ls":
                     if len(words[1:]) == 1:
                         uuid = words[1]
-                        neighbor_active_connections = mypeer.list_neighbor_actives(uuid=uuid)
+                        neighbor_active_connections = mypeer.list_neighbor_actives(
+                            uuid=uuid)
                         if neighbor_active_connections:
                             print("Neighbor Active Available Connections:")
-                            print_uuid_addrs(uuid_addrs=neighbor_active_connections)
+                            print_uuid_addrs(
+                                uuid_addrs=neighbor_active_connections)
                         else:
                             print("No active connections available!")
                     else:
