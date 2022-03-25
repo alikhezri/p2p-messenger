@@ -4,6 +4,7 @@ import socket
 import sys
 import os
 from time import sleep
+from typing import List, Tuple
 from peer import TCP_PORT, UDP_PORT, Peer
 
 SERVER = socket.gethostbyname(socket.gethostname())
@@ -18,6 +19,14 @@ formatter = logging.Formatter(
     fmt="[%(asctime)s - %(levelname)s - %(name)s] %(message)s")
 handler.setFormatter(fmt=formatter)
 logger.addHandler(hdlr=handler)
+
+
+def print_uuid_addrs(uuid_addrs: List[Tuple[str, str]]):
+    number = 0
+    for uuid, addr in uuid_addrs:
+        number += 1
+        print(f"\t{number}) {uuid} at {addr}")
+
 
 if __name__ == '__main__':
     mypeer = Peer(host=SERVER, tcp_port=TCP_PORT, udp_port=UDP_PORT)
@@ -64,24 +73,27 @@ if __name__ == '__main__':
                     print(f"My Info: {me}")
                     pass
                 elif words[0] == r"\ls":
-                    active_connections = mypeer.list_actives()
-                    if active_connections:
-                        print("Active Available Connections:")
-                        number = 0
-                        for uuid, addr in active_connections:
-                            number += 1
-                            print(f"\t{number}) {uuid} at {addr}")
+                    if len(words[1:]) == 1:
+                        uuid = words[1]
+                        neighbor_active_connections = mypeer.list_neighbor_actives(uuid=uuid)
+                        if neighbor_active_connections:
+                            print("Neighbor Active Available Connections:")
+                            print_uuid_addrs(uuid_addrs=neighbor_active_connections)
+                        else:
+                            print("No active connections available!")
                     else:
-                        print("No active connections available!")
-                    inactive_connections = mypeer.list_inactives()
-                    if inactive_connections:
-                        print("Inactive Available Connections:")
-                        number = 0
-                        for uuid, addr in inactive_connections:
-                            number += 1
-                            print(f"\t{number}) {uuid} at {addr}")
-                    else:
-                        print("No inactive connections available!")
+                        active_connections = mypeer.list_actives()
+                        if active_connections:
+                            print("Active Available Connections:")
+                            print_uuid_addrs(uuid_addrs=active_connections)
+                        else:
+                            print("No active connections available!")
+                        inactive_connections = mypeer.list_inactives()
+                        if inactive_connections:
+                            print("Inactive Available Connections:")
+                            print_uuid_addrs(uuid_addrs=inactive_connections)
+                        else:
+                            print("No inactive connections available!")
                 elif words[0] == r"\message" or words[0] == r"\chat":
                     try:
                         if len(words[1:]) == 1:

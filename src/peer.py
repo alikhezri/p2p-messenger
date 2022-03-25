@@ -36,6 +36,8 @@ DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 PRE_CONNECTION_CLOSE_SLEEP_TIME = 1.5
 IP_MULTICAST_TTL = 1
 
+DISCOVER_REQUEST_SLEEP_TIME = 5
+
 logger = logging.getLogger("p2p_messenger")
 
 
@@ -47,6 +49,8 @@ class MessageType(enum.Enum):
     DISCOVER_ANSWER = 32
     KEY_SEND_MESSAGE = 41
     KEY_ACK_MESSAGE = 42
+    DISCOVER_REQUEST = 51
+    DISCOVER_RESPONSE = 52
 
 
 class Message(ABC):
@@ -164,6 +168,35 @@ class DiscoverAnswer(Message):
         return cls._get_clean_data_func(attributes=[])(data=data)
 
 
+class DiscoverRequest(Message):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_data(self) -> Dict:
+        return super().get_data()
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=[])(data=data)
+
+
+class DiscoverResponse(Message):
+    def __init__(self, neighbors: List[Tuple[str, str]]) -> None:
+        super().__init__()
+        self.neighbors = neighbors
+
+    def get_data(self) -> Dict:
+        return {
+            "type": self.type,
+            "time": self.time,
+            "neighbors": self.neighbors,
+        }
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=['neighbors', ])(data=data)
+
+
 MESSAGE_CLASS_TO_TYPE_MAPPING = {
     Message: MessageType.ABSTRACT_MESSAGE,
     ChatMessage: MessageType.CHAT_MESSAGE,
@@ -172,6 +205,8 @@ MESSAGE_CLASS_TO_TYPE_MAPPING = {
     DiscoverAnswer: MessageType.DISCOVER_ANSWER,
     KeySendMessage: MessageType.KEY_SEND_MESSAGE,
     KeyAckMessage: MessageType.KEY_ACK_MESSAGE,
+    DiscoverRequest: MessageType.DISCOVER_REQUEST,
+    DiscoverResponse: MessageType.DISCOVER_RESPONSE,
 }
 
 MESSAGE_TYPE_TO_CLASS_MAPPING = {
@@ -188,6 +223,7 @@ class PeerConnection:
         self.port = port
         self.messages: List[ChatMessage] = []
         self.public_key: Optional[crypto.RSA.RsaKey] = None
+        self._near_neighbors: List[Tuple[str, str]] = []
 
     def get_messages(self, tail: int = DEFAULT_TAIL_LENGTH, time_format: str = DEFAULT_TIME_FORMAT) -> List[str]:
         messages = self.messages[-tail:]
@@ -361,6 +397,17 @@ class Peer:
                             self._connections[uuid].messages.append(
                                 ChatMessage(incoming=True, text=chat_msg.text)
                             )
+                        elif msg.type == MessageType.DISCOVER_REQUEST:
+                            neighbors = self.list_actives()
+                            dis_resp_msg = DiscoverResponse(neighbors=neighbors)
+                            self.send_tcp_message(
+                                message=dis_resp_msg,
+                                conn=conn,
+                                key=self._connections[uuid].public_key,
+                            )
+                        elif msg.type == MessageType.DISCOVER_RESPONSE:
+                            dis_resp_msg: DiscoverResponse = msg
+                            self._connections[uuid]._near_neighbors = dis_resp_msg.neighbors
                         else:
                             pass
                     else:
@@ -382,8 +429,9 @@ class Peer:
                     logger.debug(traceback.format_exc())
                     self.disconnect(uuid=uuid)
 
-    def _add_handler_thread(self, conn: socket.socket, addr: Tuple) -> Thread:
-        uuid = Peer.get_uuid(length=UUID_LENGTH)
+    def _add_handler_thread(self, conn: socket.socket, addr: Tuple, uuid: str = None) -> Thread:
+        if not uuid:
+            uuid = Peer.get_uuid(length=UUID_LENGTH)
         connection_t = Thread(
             target=self.handle_connection,
             args=(conn, uuid),
@@ -492,11 +540,11 @@ class Peer:
     def get_me(self):
         return f"{self.host}:{self.tcp_port}"
 
-    def connect(self, addr: Tuple[str, int]) -> Optional[socket.socket]:
+    def connect(self, addr: Tuple[str, int], uuid: str = None) -> Optional[socket.socket]:
         try:
             conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             conn.connect(addr)
-            self._add_handler_thread(conn=conn, addr=addr)
+            self._add_handler_thread(conn=conn, addr=addr, uuid=uuid)
             return conn
         except Exception as ex:
             logger.error(f"Exception when connecting to {addr}: {ex}")
@@ -632,7 +680,7 @@ class Peer:
             logger.warning(f"Connection with UUID does not exist: {uuid}")
             return None
 
-    def list_actives(self) -> List:
+    def list_actives(self) -> List[Tuple[str, str]]:
         return [
             (
                 uuid,
@@ -640,7 +688,7 @@ class Peer:
             ) for uuid in self._connections if self._connections[uuid].active
         ]
 
-    def list_inactives(self) -> List:
+    def list_inactives(self) -> List[Tuple[str, str]]:
         return [
             (
                 uuid,
@@ -648,7 +696,29 @@ class Peer:
             ) for uuid in self._connections if not self._connections[uuid].active
         ]
 
-    def get_discovered(self) -> List:
+    def list_neighbor_actives(self, uuid: str) -> List[Tuple[str, str]]:
+        if uuid not in self._connections:
+            print("UUID does not exist")
+            return []
+        if not self._connections[uuid].active:
+            print("Connection is not active")
+            return []
+        try:
+            pcon = self._connections[uuid]
+            req_msg = DiscoverRequest()
+            Peer.send_tcp_message(
+                message=req_msg,
+                conn=pcon.conn,
+                key=pcon.public_key,
+            )
+            sleep(DISCOVER_REQUEST_SLEEP_TIME)
+            return pcon._near_neighbors
+        except Exception as ex:
+            logger.debug("Exception when requesting neighbor actives")
+            logger.debug(traceback.format_exc())
+            return[]
+
+    def get_discovered(self) -> List[str]:
         return [nn for nn in self._near_neighbors]
 
     @staticmethod
