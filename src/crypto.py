@@ -5,9 +5,10 @@ from Crypto.Cipher import PKCS1_OAEP
 from Crypto.PublicKey import RSA
 import base64
 
+RSA_LENGTH = 2048
 
 def generate_keys() -> Tuple[RSA.RsaKey, RSA.RsaKey]:
-    private_key = RSA.generate(2048)
+    private_key = RSA.generate(RSA_LENGTH)
     public_key = private_key.publickey()
 
     return public_key, private_key

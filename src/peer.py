@@ -10,7 +10,7 @@ from threading import Thread
 from time import sleep
 from datetime import datetime
 import traceback
-from typing import Callable, Dict, List, Optional, Tuple, Type
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Type
 
 from exceptions import (
     HandshakeException,
@@ -30,6 +30,8 @@ UDP_HEADER = 64
 UDP_BODY = 2048
 ENCODING = 'utf-8'
 UUID_LENGTH = 8
+
+ENCRYPTION_BLOCK_SIZE = crypto.RSA_LENGTH
 
 DEFAULT_TAIL_LENGTH = 20
 DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -238,6 +240,12 @@ class PeerConnection:
         return formatted_messages
 
 
+def batch(iterable: Iterable, n=1):
+    l = len(iterable)
+    for ndx in range(0, l, n):
+        yield iterable[ndx:min(ndx + n, l)]
+
+
 class Peer:
     def __init__(self, host: str, tcp_port: int, udp_port: int) -> None:
         self.host = host
@@ -399,7 +407,8 @@ class Peer:
                             )
                         elif msg.type == MessageType.DISCOVER_REQUEST:
                             neighbors = self.list_actives()
-                            dis_resp_msg = DiscoverResponse(neighbors=neighbors)
+                            dis_resp_msg = DiscoverResponse(
+                                neighbors=neighbors)
                             self.send_tcp_message(
                                 message=dis_resp_msg,
                                 conn=conn,
@@ -590,11 +599,25 @@ class Peer:
 
     @staticmethod
     def decrypt(cipher: bytes, key: str) -> bytes:
-        return crypto.decrypt_bytes(enc_payload=cipher, key=key)
+        logger.debug(f"Cipher Length: {len(cipher)}")
+        decrypted_chunks: List[bytes] = [
+            crypto.decrypt_bytes(
+                enc_payload=chunk,
+                key=key
+            ) for chunk in batch(iterable=cipher, n=ENCRYPTION_BLOCK_SIZE)
+        ]
+        return b''.join(decrypted_chunks)
 
     @staticmethod
     def encrypt(plain: bytes, key: str) -> bytes:
-        return crypto.encrypt_bytes(payload=plain, key=key)
+        logger.debug(f"Plain Length: {len(plain)}")
+        encrypted_chunks: List[bytes] = [
+            crypto.encrypt_bytes(
+                payload=chunk,
+                key=key,
+            ) for chunk in batch(iterable=plain, n=ENCRYPTION_BLOCK_SIZE)
+        ]
+        return b''.join(encrypted_chunks)
 
     @staticmethod
     def get_payload(data: Dict, encryption_key: Optional[str] = None) -> bytes:
