@@ -31,7 +31,9 @@ UDP_BODY = 2048
 ENCODING = 'utf-8'
 UUID_LENGTH = 8
 
-ENCRYPTION_BLOCK_SIZE = crypto.RSA_LENGTH
+DECRYPTION_BLOCK_SIZE = (crypto.RSA_LENGTH+7) // 8
+HASH_LENGTH = 20
+ENCRYPTION_BLOCK_SIZE = (crypto.RSA_LENGTH+7) // 8 - 2 - 2*HASH_LENGTH
 
 DEFAULT_TAIL_LENGTH = 20
 DEFAULT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -604,7 +606,7 @@ class Peer:
             crypto.decrypt_bytes(
                 enc_payload=chunk,
                 key=key
-            ) for chunk in batch(iterable=cipher, n=ENCRYPTION_BLOCK_SIZE)
+            ) for chunk in batch(iterable=cipher, n=DECRYPTION_BLOCK_SIZE)
         ]
         return b''.join(decrypted_chunks)
 
