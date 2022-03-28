@@ -41,6 +41,8 @@ PRE_CONNECTION_CLOSE_SLEEP_TIME = 1.5
 IP_MULTICAST_TTL = 1
 
 DISCOVER_REQUEST_SLEEP_TIME = 5
+PROXY_REQUEST_SLEEP_TIME = 3
+WAIT_HANSHAKE_SLEEP_TIME = 3
 
 logger = logging.getLogger("p2p_messenger")
 
@@ -55,6 +57,13 @@ class MessageType(enum.Enum):
     KEY_ACK_MESSAGE = 42
     DISCOVER_REQUEST = 51
     DISCOVER_RESPONSE = 52
+    PROXY_REQUEST = 61
+    PROXY_FAIL_RESPONSE = 62
+    PROXY_SUCCESS_RESPONSE = 63
+    UPDATE_PUBLIC_KEY_MESSAGE = 71
+    NEW_CONNECTION_REQUEST = 81
+    NEW_CONNECTION_FAIL_RESPONSE = 82
+    NEW_CONNECTION_SUCCESS_RESPONSE = 83
 
 
 class Message(ABC):
@@ -75,11 +84,11 @@ class Message(ABC):
             logger.debug(f"attributes: {attributes}")
             logger.debug(f"data: {data}")
             for attr in attributes:
-                if attr in data:
+                if attr in data:  # FIXME: types of values should be checked
                     cleaned_data[attr] = data[attr]
                 else:
                     return False
-            logger.debug(f"cleaned_data {cleaned_data}")
+            logger.debug(f"cleaned_data: {cleaned_data}")
             return cleaned_data
         return _clean_data
 
@@ -125,15 +134,20 @@ class KeySendMessage(Message):
 
 
 class KeyAckMessage(Message):
-    def __init__(self) -> None:
+    def __init__(self, remote_conn_uuid: str) -> None:
         super().__init__()
+        self.remote_conn_uuid = remote_conn_uuid
 
     def get_data(self) -> Dict:
-        return super().get_data()
+        return {
+            "type": self.type,
+            "time": self.time,
+            "remote_conn_uuid": self.remote_conn_uuid,
+        }
 
     @classmethod
     def clean_data(cls, data: Dict) -> Optional[Dict]:
-        return cls._get_clean_data_func(attributes=[])(data=data)
+        return cls._get_clean_data_func(attributes=["remote_conn_uuid"])(data=data)
 
 
 class DisconnectMessage(Message):
@@ -201,6 +215,105 @@ class DiscoverResponse(Message):
         return cls._get_clean_data_func(attributes=['neighbors', ])(data=data)
 
 
+class ProxyRequest(Message):
+    def __init__(self, uuid: str) -> None:
+        super().__init__()
+        self.uuid = uuid
+
+    def get_data(self) -> Dict:
+        return {
+            "type": self.type,
+            "time": self.time,
+            "uuid": self.uuid,
+        }
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=['uuid', ])(data=data)
+
+
+class ProxyFailResponse(Message):
+    def __init__(self, uuid: str, reason: str) -> None:
+        super().__init__()
+        self.uuid = uuid
+        self.reason = reason
+
+    def get_data(self) -> Dict:
+        return {
+            "type": self.type,
+            "time": self.time,
+            "uuid": self.uuid,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=['uuid', 'text'])(data=data)
+
+
+class ProxySuccessResponse(KeySendMessage):
+    def __init__(self, key: str, uuid: str) -> None:
+        super().__init__(key=key)
+        self.uuid = uuid
+
+    def get_data(self) -> Dict:
+        return {
+            "type": self.type,
+            "time": self.time,
+            "key": self.key,
+            "uuid": self.uuid
+        }
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=['key', 'uuid'])(data=data)
+
+
+class UpdatePublicKeyMessage(KeySendMessage):
+    pass
+
+
+class NewConnectionRequest(Message):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_data(self) -> Dict:
+        return super().get_data()
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=[])(data=data)
+
+
+class NewConnectionFailResponse(Message):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_data(self) -> Dict:
+        return super().get_data()
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=[])(data=data)
+
+
+class NewConnectionSuccessResponse(Message):
+    def __init__(self, uuid: str) -> None:
+        super().__init__()
+        self.uuid = uuid
+
+    def get_data(self) -> Dict:
+        return {
+            "type": self.type,
+            "time": self.time,
+            "uuid": self.uuid,
+        }
+
+    @classmethod
+    def clean_data(cls, data: Dict) -> Optional[Dict]:
+        return cls._get_clean_data_func(attributes=['uuid', ])(data=data)
+
+
 MESSAGE_CLASS_TO_TYPE_MAPPING = {
     Message: MessageType.ABSTRACT_MESSAGE,
     ChatMessage: MessageType.CHAT_MESSAGE,
@@ -211,6 +324,13 @@ MESSAGE_CLASS_TO_TYPE_MAPPING = {
     KeyAckMessage: MessageType.KEY_ACK_MESSAGE,
     DiscoverRequest: MessageType.DISCOVER_REQUEST,
     DiscoverResponse: MessageType.DISCOVER_RESPONSE,
+    ProxyRequest: MessageType.PROXY_REQUEST,
+    ProxyFailResponse: MessageType.PROXY_FAIL_RESPONSE,
+    ProxySuccessResponse: MessageType.PROXY_SUCCESS_RESPONSE,
+    UpdatePublicKeyMessage: MessageType.UPDATE_PUBLIC_KEY_MESSAGE,
+    NewConnectionRequest: MessageType.NEW_CONNECTION_REQUEST,
+    NewConnectionFailResponse: MessageType.NEW_CONNECTION_FAIL_RESPONSE,
+    NewConnectionSuccessResponse: MessageType.NEW_CONNECTION_SUCCESS_RESPONSE,
 }
 
 MESSAGE_TYPE_TO_CLASS_MAPPING = {
@@ -221,13 +341,17 @@ MESSAGE_TYPE_TO_CLASS_MAPPING = {
 class PeerConnection:
     def __init__(self, uuid: str, conn: socket.socket, host: str, port: int, active: bool = True) -> None:
         self.uuid = uuid
+        self.uuid_stash = [uuid]
         self.active = active
         self.conn = conn
         self.host = host
         self.port = port
         self.messages: List[ChatMessage] = []
         self.public_key: Optional[crypto.RSA.RsaKey] = None
+        self.pkey_stash: List[crypto.RSA.RsaKey] = []
         self._near_neighbors: List[Tuple[str, str]] = []
+        self.remote_uuid: Optional[str] = None
+        self.proxy_pcon: Optional[PeerConnection] = None
 
     def get_messages(self, tail: int = DEFAULT_TAIL_LENGTH, time_format: str = DEFAULT_TIME_FORMAT) -> List[str]:
         messages = self.messages[-tail:]
@@ -276,23 +400,32 @@ class Peer:
         return full_message
 
     @staticmethod
-    def tcp_get_payload(conn: socket, header_length: int = TCP_HEADER) -> bytes:
-        payload_length_str = conn.recv(
-            header_length).decode(ENCODING).strip()
+    def receive_tcp_packet(conn: socket.socket, header_length: int = TCP_HEADER) -> Tuple[Optional[bytes], Optional[bytes]]:
+        header = conn.recv(header_length)
+        payload_length_str = header.decode(ENCODING).strip()
         if payload_length_str:
             try:
                 payload_length = int(payload_length_str)
                 payload = conn.recv(payload_length)
-                return payload
+                return header, payload
             except Exception as ex:
                 logger.error(f"Exception wehen getting TCP payload: {ex}")
-                return False
+                return None, None
         else:
             raise Exception(
                 f"No TCP payload_length_str: '{payload_length_str}'")
 
     @staticmethod
-    def udp_get_payload(conn: socket.socket, header_length: int = UDP_HEADER, body_length: int = UDP_BODY) -> Tuple[Optional[bytes], Optional[Tuple[str, int]]]:
+    def receive_tcp_payload(conn: socket.socket, header_length: int = TCP_HEADER) -> Optional[bytes]:
+        header, payload = Peer.receive_tcp_packet(
+            conn=conn, header_length=header_length
+        )
+        if not (header and payload):
+            return None
+        return payload
+
+    @staticmethod
+    def receive_udp_payload_addr(conn: socket.socket, header_length: int = UDP_HEADER, body_length: int = UDP_BODY) -> Tuple[Optional[bytes], Optional[Tuple[str, int]]]:
         packet_bytes, addr = conn.recvfrom(header_length + body_length)
         payload_length_str = packet_bytes[:header_length].decode(
             ENCODING).strip()
@@ -337,12 +470,7 @@ class Peer:
             return MessageClass(**clean_data)
 
     @staticmethod
-    def receive_tcp_message(conn: socket.socket, key: Optional[crypto.RSA.RsaKey] = None) -> Optional[Message]:
-        payload = Peer.tcp_get_payload(conn=conn)
-        if not payload:
-            logger.debug("No Payload in receive_message")
-            raise ReceiveTCPMessageException("Payload receive Exception")
-        logger.debug(f"payload in receive_message: {payload}")
+    def receive_payload_message(payload: bytes, key: Optional[crypto.RSA.RsaKey] = None) -> Optional[Message]:
         data = Peer.extract_payload(
             payload=payload,
             encryption_key=key
@@ -354,75 +482,271 @@ class Peer:
         message = Peer.get_message(data)
         return message
 
-    def handshake(self, conn: socket.socket, uuid: str) -> None:
+    @staticmethod
+    def receive_tcp_message(conn: socket.socket, key: Optional[crypto.RSA.RsaKey] = None) -> Optional[Message]:
+        payload = Peer.receive_tcp_payload(conn=conn)
+        if not payload:
+            logger.debug("No Payload in receive_tcp_message")
+            raise ReceiveTCPMessageException("Payload receive Exception")
+        logger.debug(f"payload in receive_message: {payload}")
+        return Peer.receive_payload_message(
+            payload=payload,
+            key=key,
+        )
+
+    def handshake(self, pcon: PeerConnection) -> None:
         key_send_msg = KeySendMessage(
             key=crypto.serialize_key(self.public_key))
-        Peer.send_tcp_message(message=key_send_msg, conn=conn)
+        Peer.send_tcp_message(message=key_send_msg, conn=pcon.conn)
 
-        key_receive_msg: KeySendMessage = Peer.receive_tcp_message(conn=conn)
+        key_receive_msg: KeySendMessage = Peer.receive_tcp_message(
+            conn=pcon.conn,
+        )
         if not key_receive_msg:
             raise TransceiveHandshakeKeyException("Get key failed")
         if key_receive_msg.type == MessageType.KEY_SEND_MESSAGE:
             key = crypto.load_key(key_receive_msg.key)
-            self._connections[uuid].public_key = key
+            pcon.public_key = key
         else:
             raise TransceiveHandshakeKeyException("Excpected key")
 
-        key_ack_send_msg = KeyAckMessage()
-        Peer.send_tcp_message(message=key_ack_send_msg, conn=conn)
+        key_ack_send_msg = KeyAckMessage(remote_conn_uuid=pcon.uuid)
+        Peer.send_tcp_message(
+            message=key_ack_send_msg,
+            conn=pcon.conn,
+            key=pcon.public_key
+        )
 
-        key_ack_rcv_msg: KeyAckMessage = Peer.receive_tcp_message(conn=conn)
+        key_ack_rcv_msg: KeyAckMessage = Peer.receive_tcp_message(
+            conn=pcon.conn,
+            key=self.private_key
+        )
         if not key_ack_rcv_msg:
             raise TransceiveHandshakeAckException("Get ack failed")
         if key_ack_rcv_msg.type == MessageType.KEY_ACK_MESSAGE:
-            pass
+            pcon.remote_uuid = key_ack_rcv_msg.remote_conn_uuid
         else:
             raise TransceiveHandshakeAckException("Ack failed")
 
-    def handle_connection(self, conn: socket.socket, uuid: str) -> None:
-        with conn:
+    @staticmethod
+    def write_src_peer_on_dest_peer(src_pcon: PeerConnection, dest_pcon: PeerConnection):
+        while src_pcon.active and dest_pcon.active:
             try:
-                self.handshake(
-                    conn=conn,
-                    uuid=uuid,
+                payload = Peer.receive_tcp_payload(conn=src_pcon.conn)
+                prepared_message = Peer.wrap_payload(payload=payload)
+                dest_pcon.conn.sendall(prepared_message)
+            except Exception as ex:
+                logger.debug(
+                    f"Exception when proxing data from src to dest {ex}")
+                logger.debug(traceback.format_exc())
+                break
+
+    def proxify(self, src_uuid: str, dest_uuid: str) -> None:
+        src_pcon = self._connections[src_uuid]
+        if dest_uuid not in self._connections:
+            pxy_fl_resp = ProxyFailResponse(
+                uuid=dest_uuid,
+                reason="uuid does not exist"
+            )
+            Peer.send_tcp_message(
+                message=pxy_fl_resp,
+                conn=src_pcon.conn,
+                key=crypto.serialize_key(src_pcon.public_key)
+            )
+            return
+
+        main_dest_pcon = self._connections[dest_uuid]
+        if not main_dest_pcon.active:
+            pxy_fl_resp = ProxyFailResponse(
+                uuid=dest_uuid,
+                reason="connection is not active"
+            )
+            Peer.send_tcp_message(
+                message=pxy_fl_resp,
+                conn=src_pcon.conn,
+                key=crypto.serialize_key(src_pcon.public_key)
+            )
+            return
+
+        dest_pcon = None
+        dest_conn = None
+        if not dest_conn:
+            dest_conn_uuid = Peer.get_uuid(length=UUID_LENGTH)
+            dest_conn = self.connect(
+                addr=(main_dest_pcon.host, main_dest_pcon.port),
+                uuid=dest_conn_uuid,
+            )
+            if dest_conn:
+                sleep(WAIT_HANSHAKE_SLEEP_TIME)
+                dest_pcon = self._connections[dest_conn_uuid]
+        if not dest_conn:
+            try:
+                new_conn_req = NewConnectionRequest()
+                Peer.send_tcp_message(
+                    message=new_conn_req,
+                    conn=main_dest_pcon.conn,
+                    key=main_dest_pcon.public_key,
                 )
+                msg = Peer.receive_tcp_message(
+                    conn=main_dest_pcon.conn,
+                    key=self.private_key,
+                )
+                if not msg.type == MessageType.NEW_CONNECTION_SUCCESS_RESPONSE:
+                    raise Exception(
+                        f"Expecting '{MessageType.NEW_CONNECTION_SUCCESS_RESPONSE.name}' message but received '{msg.type.name}'")
+                new_conn_resp: NewConnectionSuccessResponse = msg
+                if not new_conn_resp.uuid in self._connections:
+                    raise Exception("UUID doesn't exist")
+                if not self._connections[new_conn_resp.uuid].active:
+                    raise Exception("Connection is not active")
+                dest_pcon = self._connections[new_conn_resp.uuid]
+            except Exception as ex:
+                logger.debug(traceback.format_exc())
+
+        if not dest_pcon:
+            pxy_fl_resp = ProxyFailResponse(
+                uuid=dest_uuid,
+                reason="couldn't connect to final dest"
+            )
+            Peer.send_tcp_message(
+                message=pxy_fl_resp,
+                conn=src_pcon.conn,
+                key=src_pcon.public_key
+            )
+            return
+        pxy_sec_resp = ProxySuccessResponse(
+            key=crypto.serialize_key(dest_pcon.public_key),
+            uuid=dest_pcon.uuid,
+        )
+        Peer.send_tcp_message(
+            message=pxy_sec_resp,
+            conn=src_pcon.conn,
+            key=src_pcon.public_key,
+        )
+        upd_pb_key_msg = UpdatePublicKeyMessage(
+            key=crypto.serialize_key(src_pcon.public_key)
+        )
+        Peer.send_tcp_message(
+            message=upd_pb_key_msg,
+            conn=dest_pcon.conn,
+            key=dest_pcon.public_key,
+        )
+        dest_pcon.proxy_pcon = src_pcon
+        Peer.write_src_peer_on_dest_peer(
+            src_pcon=src_pcon,
+            dest_pcon=dest_pcon,
+        )
+        dest_pcon.proxy_pcon = None
+        dest_pcon.active = False
+        src_pcon.active = False  # FIXME: this shouldn't be deactivated
+        # \d command in source should be fixed
+
+    def process_message(self, msg: Message, pcon: PeerConnection) -> Optional[bool]:
+        if msg:
+            if msg.type == MessageType.DISCONNNECT_MESSAGE:
+                dis_msg: DisconnectMessage = msg
+                if pcon.pkey_stash:
+                    pcon.public_key = pcon.pkey_stash.pop()
+                    pcon.uuid_stash.pop()
+                else:
+                    pcon.active = False
+            elif msg.type == MessageType.CHAT_MESSAGE:
+                chat_msg: ChatMessage = msg
+                pcon.messages.append(
+                    ChatMessage(incoming=True, text=chat_msg.text)
+                )
+            elif msg.type == MessageType.DISCOVER_REQUEST:
+                neighbors = self.list_actives()
+                dis_resp_msg = DiscoverResponse(
+                    neighbors=neighbors)
+                self.send_tcp_message(
+                    message=dis_resp_msg,
+                    conn=pcon.conn,
+                    key=crypto.serialize_key(pcon.public_key),
+                )
+            elif msg.type == MessageType.DISCOVER_RESPONSE:
+                dis_resp_msg: DiscoverResponse = msg
+                pcon._near_neighbors = dis_resp_msg.neighbors
+            elif msg.type == MessageType.PROXY_REQUEST:
+                pxy_req_msg: ProxyRequest = msg
+                try:
+                    self.proxify(
+                        src_uuid=pcon.uuid,
+                        dest_uuid=pxy_req_msg.uuid,
+                    )
+                except Exception as ex:
+                    logger.debug(f"Failed to proxify: {ex}")
+                    logger.debug(traceback.format_exc())
+            elif msg.type == MessageType.PROXY_SUCCESS_RESPONSE:
+                pxy_sec_resp: ProxySuccessResponse = msg
+                pcon.pkey_stash.append(pcon.public_key)
+                pcon.uuid_stash.append(pxy_sec_resp.uuid)
+                pcon.public_key = crypto.load_key(pxy_sec_resp.key)
+            elif msg.type == MessageType.UPDATE_PUBLIC_KEY_MESSAGE:
+                upd_pb_key_msg: UpdatePublicKeyMessage = msg
+                pcon.public_key = crypto.load_key(
+                    upd_pb_key_msg.key)
+            elif msg.type == MessageType.NEW_CONNECTION_REQUEST:
+                new_conn_uuid = Peer.get_uuid(UUID_LENGTH)
+                if self.connect(
+                    addr=(pcon.host, pcon.port),
+                    uuid=new_conn_uuid,
+                ):
+                    sleep(WAIT_HANSHAKE_SLEEP_TIME)
+                    new_conn_remote_uuid = self._connections[new_conn_uuid].remote_uuid
+                    new_conn_s_resp = NewConnectionSuccessResponse(
+                        uuid=new_conn_remote_uuid
+                    )
+                    Peer.send_tcp_message(
+                        message=new_conn_s_resp,
+                        conn=pcon.conn,
+                        key=pcon.public_key,
+                    )
+                else:
+                    new_conn_f_resp = NewConnectionFailResponse()
+                    Peer.send_tcp_message(
+                        message=new_conn_f_resp,
+                        conn=pcon.conn,
+                        key=pcon.public_key
+                    )
+            else:
+                return None
+        else:
+            return None
+        return True
+
+    def handle_connection(self, uuid: str) -> None:
+        pcon = self._connections[uuid]
+        with pcon.conn:
+            try:
+                self.handshake(pcon=pcon)
             except HandshakeException as ex:
                 logger.debug(f"Couldn't perform handshake: {ex}")
                 raise Exception("Handshake failed")
             except Exception as ex:
                 logger.debug(traceback.format_exc())
                 self.disconnect(uuid=uuid)
-            while self._connections[uuid].active:
+            while pcon.active:
                 try:
-                    msg = Peer.receive_tcp_message(
-                        conn=conn,
-                        key=self.private_key,
+                    header, payload = Peer.receive_tcp_packet(
+                        conn=pcon.conn,
                     )
-                    if msg:
-                        if msg.type == MessageType.DISCONNNECT_MESSAGE:
-                            dis_msg: DisconnectMessage = msg
-                            self._connections[uuid].active = False
-                        elif msg.type == MessageType.CHAT_MESSAGE:
-                            chat_msg: ChatMessage = msg
-                            self._connections[uuid].messages.append(
-                                ChatMessage(incoming=True, text=chat_msg.text)
-                            )
-                        elif msg.type == MessageType.DISCOVER_REQUEST:
-                            neighbors = self.list_actives()
-                            dis_resp_msg = DiscoverResponse(
-                                neighbors=neighbors)
-                            self.send_tcp_message(
-                                message=dis_resp_msg,
-                                conn=conn,
-                                key=self._connections[uuid].public_key,
-                            )
-                        elif msg.type == MessageType.DISCOVER_RESPONSE:
-                            dis_resp_msg: DiscoverResponse = msg
-                            self._connections[uuid]._near_neighbors = dis_resp_msg.neighbors
-                        else:
-                            pass
+                    if not payload:
+                        logger.debug("No Payload in receive_tcp_packet")
+                        raise ReceiveTCPMessageException(
+                            "Payload receive Exception")
+                    if pcon.proxy_pcon:
+                        prepared_message = header + payload
+                        pcon.proxy_pcon.conn.sendall(prepared_message)
                     else:
-                        continue
+                        msg = Peer.receive_payload_message(
+                            payload=payload,
+                            key=self.private_key
+                        )
+                        self.process_message(
+                            msg=msg,
+                            pcon=pcon,
+                        )
                 except IOError as ex:
                     if ex.errno != errno.EAGAIN and ex.errno != errno.EWOULDBLOCK:
                         self.disconnect(uuid=uuid)
@@ -433,7 +757,7 @@ class Peer:
                         f"Exception when receiving TCP messge: {ex}")
                     continue
                 except Exception as ex:
-                    if not self._connections[uuid].active:
+                    if not pcon.active:
                         # if know connection is closed
                         continue
                     logger.error(f"Exception when handling connection {ex}")
@@ -443,16 +767,18 @@ class Peer:
     def _add_handler_thread(self, conn: socket.socket, addr: Tuple, uuid: str = None) -> Thread:
         if not uuid:
             uuid = Peer.get_uuid(length=UUID_LENGTH)
-        connection_t = Thread(
-            target=self.handle_connection,
-            args=(conn, uuid),
-            daemon=True,
-        )
         self._connections[uuid] = PeerConnection(
             uuid=uuid,
             conn=conn,
             host=addr[0],
             port=addr[1],
+        )
+        connection_t = Thread(
+            target=self.handle_connection,
+            kwargs={
+                "uuid": uuid,
+            },
+            daemon=True,
         )
         connection_t.start()
         return connection_t
@@ -478,7 +804,7 @@ class Peer:
 
     @staticmethod
     def receive_udp_message(conn: socket.socket) -> Tuple[Optional[Message], Optional[Tuple[str, int]]]:
-        payload, addr = Peer.udp_get_payload(conn=conn)
+        payload, addr = Peer.receive_udp_payload_addr(conn=conn)
         if not payload:
             logger.debug("No Payload in receive_message")
             raise ReceiveUDPMessageException("Payload receive Exception")
@@ -533,13 +859,17 @@ class Peer:
         try:
             tcp_listen_thread = Thread(
                 target=self._tcp_listen,
-                args=((self.host, self.tcp_port),),
+                kwargs={
+                    "addr": (self.host, self.tcp_port),
+                },
                 daemon=True,
             )
             tcp_listen_thread.start()
             udp_listen_thread = Thread(
                 target=self._udp_listen,
-                args=((self.host, self.udp_port),),
+                kwargs={
+                    "addr": (self.host, self.udp_port),
+                },
                 daemon=True
             )
             udp_listen_thread.start()
@@ -705,10 +1035,33 @@ class Peer:
             logger.warning(f"Connection with UUID does not exist: {uuid}")
             return None
 
+    def setup_proxy(self, close_conn_uuid: str, far_conn_uuid: str):
+        pcon = self._connections[close_conn_uuid]
+        if pcon.active:
+            pxy_req_msg = ProxyRequest(
+                uuid=far_conn_uuid,
+            )
+            try:
+                self.send_tcp_message(
+                    message=pxy_req_msg,
+                    conn=pcon.conn,
+                    key=pcon.public_key,
+                )
+                sleep(PROXY_REQUEST_SLEEP_TIME)
+            except Exception as ex:
+                print(f"Failed to send proxy request to {close_conn_uuid}")
+                logger.debug(
+                    f"Exception when sending ProxyRequest to {close_conn_uuid}: {ex}")
+                logger.debug(traceback.format_exc())
+        else:
+            print(
+                "local connection is closed, can't proxy")
+
     def list_actives(self) -> List[Tuple[str, str]]:
         return [
             (
-                uuid,
+                # uuid,
+                ' --> '.join(self._connections[uuid].uuid_stash),
                 f"{self._connections[uuid].host}:{self._connections[uuid].port}",
             ) for uuid in self._connections if self._connections[uuid].active
         ]
@@ -716,7 +1069,8 @@ class Peer:
     def list_inactives(self) -> List[Tuple[str, str]]:
         return [
             (
-                uuid,
+                # uuid,
+                ' --> '.join(self._connections[uuid].uuid_stash),
                 f"{self._connections[uuid].host}:{self._connections[uuid].port}",
             ) for uuid in self._connections if not self._connections[uuid].active
         ]

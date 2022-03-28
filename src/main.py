@@ -129,6 +129,14 @@ if __name__ == '__main__':
                             print(f"\t{number}) {d}")
                     else:
                         print("No Neighbor Discoverd")
+                elif words[0] == r"\proxy":
+                    if len(words[1:]) != 2:
+                        print("Wrong Usage Of Proxy Command\nCorrect Usage: \proxy <neighbor_uuid> <neighbors_neighbor_uuid>")
+                        continue
+                    else:
+                        n_uuid = words[1]
+                        n_n_uuid = words[2]
+                        mypeer.setup_proxy(close_conn_uuid=n_uuid, far_conn_uuid=n_n_uuid)
                 elif words[0] == r"\help" or words[0] == r"\h":
                     # TODO: help should be added
                     pass
