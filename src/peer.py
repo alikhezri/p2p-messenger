@@ -26,6 +26,7 @@ TCP_PORT = 3434
 UDP_PORT = 5151
 
 TCP_HEADER = 64
+TCP_HEADER_BODY_LENGTH = 8
 UDP_HEADER = 64
 UDP_BODY = 2048
 ENCODING = 'utf-8'
@@ -402,7 +403,7 @@ class Peer:
     @staticmethod
     def receive_tcp_packet(conn: socket.socket, header_length: int = TCP_HEADER) -> Tuple[Optional[bytes], Optional[bytes]]:
         header = conn.recv(header_length)
-        payload_length_str = header.decode(ENCODING).strip()
+        payload_length_str = header[:TCP_HEADER_BODY_LENGTH].decode(ENCODING).strip()
         if payload_length_str:
             try:
                 payload_length = int(payload_length_str)
@@ -662,7 +663,7 @@ class Peer:
                 self.send_tcp_message(
                     message=dis_resp_msg,
                     conn=pcon.conn,
-                    key=crypto.serialize_key(pcon.public_key),
+                    key=pcon.public_key,
                 )
             elif msg.type == MessageType.DISCOVER_RESPONSE:
                 dis_resp_msg: DiscoverResponse = msg
