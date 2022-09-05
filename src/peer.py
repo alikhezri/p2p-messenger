@@ -657,6 +657,7 @@ class Peer:
                     ChatMessage(incoming=True, text=chat_msg.text)
                 )
             elif msg.type == MessageType.DISCOVER_REQUEST:
+                self.discover()
                 neighbors = self.list_actives()
                 dis_resp_msg = DiscoverResponse(
                     neighbors=neighbors)
